@@ -14,7 +14,7 @@ struct RoverPacket {
   int16_t right;
 };
 static_assert(sizeof(RoverPacket) == 12, "Receiver requires 12 bytes");
-static const uint8_t roverMac[] = {0xA0,0xF2,0x62,0xEB,0x98,0xBC};
+static const uint8_t roverMac[] = {0xA0,0xF2,0x62,0xEC,0x0C,0x5C};
 static bool radioReady = false;
 static uint32_t sequence = 0;
 
@@ -35,12 +35,13 @@ static void beginRadio() {
   peer.encrypt = false;
   if (!radioCheck(esp_now_add_peer(&peer), "peer")) return;
   radioReady = true;
-  Serial.println("RADIO:Unicast A0:F2:62:EB:98:BC channel 1, 12 bytes; send acceptance is not rover confirmation");
+  Serial.println("RADIO:Unicast A0:F2:62:EC:0C:5C channel 1, 12 bytes; send acceptance is not rover confirmation");
   Serial.printf("RADIO:Handheld MAC %s (put this in ROVER_ALLOWED_SENDER on the receiver)\n", WiFi.macAddress().c_str());
 }
 static void sendRover(int16_t left, int16_t right) {
   if (!radioReady) return;
-  RoverPacket packet = {0x72A19C43, sequence++, left, right};
+  // Reverse the receiver's P3 (right) motor; P2 (left) stays unchanged.
+  RoverPacket packet = {0x72A19C43, sequence++, left, static_cast<int16_t>(-right)};
   static unsigned long lastError = 0;
   esp_err_t result = esp_now_send(roverMac, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
   if (result != ESP_OK && millis() - lastError > 1000) {
