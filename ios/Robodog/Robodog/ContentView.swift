@@ -101,7 +101,7 @@ struct ContentView: View {
             .padding()
         }
         .onAppear {
-            detector.onFrame = { blocked in ble.send(blocked ? "CAM:BLOCK" : "CAM:CLEAR") }
+            detector.onFrame = { verdict in ble.send(verdict.command) }
             guide.onCue = { cue in ble.send("NAV:" + cue) }
             guide.onAnnounce = { text in voice.say(text) }
             ble.onLine = { line in
@@ -137,7 +137,12 @@ struct ContentView: View {
 
     private var cameraStatus: String {
         if !detector.isRunning { return "Camera off" }
-        return detector.blocked ? "Obstacle ahead: STOP sent" : "No obstacle recognized in the centre"
+        switch detector.verdict {
+        case .clear: return "No obstacle recognized in the centre"
+        case .avoidLeft: return "Obstacle ahead: left side is free"
+        case .avoidRight: return "Obstacle ahead: right side is free"
+        case .blocked: return "Obstacle ahead, no free side: STOP"
+        }
     }
 
     private func toggleCamera() {

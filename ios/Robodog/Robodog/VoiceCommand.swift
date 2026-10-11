@@ -99,6 +99,12 @@ final class VoiceCommand: ObservableObject {
             awaitingClip = false
             collecting = false
             status = String(line.dropFirst(6))
+        } else if line == "AVOID:LEFT" || line == "AVOID:RIGHT" {
+            say("Obstacle ahead. Going around to the \(line == "AVOID:LEFT" ? "left" : "right").")
+        } else if line == "AVOID:Done" {
+            say("Clear. Carrying on.")
+        } else if line == "STOP:No way around the obstacle" || line == "STOP:Could not find a way around" {
+            say("Obstacle ahead and no way around. I've stopped.")
         } else if line.hasPrefix("REFUSED:") {
             // Intelligent disobedience: the board would not move forward.
             finishDrive()

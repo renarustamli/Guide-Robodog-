@@ -5,19 +5,35 @@ import SwiftUI
 import Vision
 
 /// Rear-camera object detection. Same rule as browser/Camera Test.html: a recognized
-/// object overlapping the centre zone means BLOCK.
+/// object overlapping the centre zone means the path is blocked. If one side of the view is free,
+/// the board is told to go around that way (CAM:AVOID:LEFT / CAM:AVOID:RIGHT) instead of stopping.
 final class ObstacleDetector: NSObject, ObservableObject {
+    enum Verdict: Equatable {
+        case clear, avoidLeft, avoidRight, blocked
+
+        /// The command sent to the board for this frame.
+        var command: String {
+            switch self {
+            case .clear: return "CAM:CLEAR"
+            case .avoidLeft: return "CAM:AVOID:LEFT"
+            case .avoidRight: return "CAM:AVOID:RIGHT"
+            case .blocked: return "CAM:BLOCK"
+            }
+        }
+    }
+
     /// Name of the Core ML model file you drag into Xcode (without .mlmodel).
     static let modelName = "YOLOv3Tiny"
 
     @Published var isRunning = false
-    @Published var blocked = false
+    @Published var verdict = Verdict.clear
+    var blocked: Bool { verdict != .clear }
     @Published var objects: [String] = []
     @Published var error: String?
 
     let session = AVCaptureSession()
-    /// Called on the main thread after every analysed frame (about 5 per second). true = blocked.
-    var onFrame: ((Bool) -> Void)?
+    /// Called on the main thread after every analysed frame (about 5 per second).
+    var onFrame: ((Verdict) -> Void)?
 
     private let queue = DispatchQueue(label: "robodog.camera")
     private var request: VNCoreMLRequest?
@@ -28,6 +44,9 @@ final class ObstacleDetector: NSObject, ObservableObject {
 
     // Middle 40% wide, 70% tall (Vision uses normalized coordinates).
     private let zone = CGRect(x: 0.3, y: 0.15, width: 0.4, height: 0.7)
+    // The strips either side of the centre, same height. Free = nothing recognised in it.
+    private let leftZone = CGRect(x: 0, y: 0.15, width: 0.3, height: 0.7)
+    private let rightZone = CGRect(x: 0.7, y: 0.15, width: 0.3, height: 0.7)
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
@@ -57,7 +76,7 @@ final class ObstacleDetector: NSObject, ObservableObject {
             self.held = []
             DispatchQueue.main.async {
                 self.isRunning = false
-                self.blocked = false
+                self.verdict = .clear
                 self.objects = []
             }
         }
@@ -88,6 +107,25 @@ final class ObstacleDetector: NSObject, ObservableObject {
     }
 }
 
+extension ObstacleDetector {
+    /// Clear if nothing is in the centre. Otherwise go around on a free side: if both are free, the
+    /// side away from the obstacles; if neither is, blocked.
+    func decide(_ boxes: [CGRect]) -> Verdict {
+        let ahead = boxes.filter { $0.intersects(zone) }
+        guard !ahead.isEmpty else { return .clear }
+        let leftFree = !boxes.contains { $0.intersects(leftZone) }
+        let rightFree = !boxes.contains { $0.intersects(rightZone) }
+        switch (leftFree, rightFree) {
+        case (true, false): return .avoidLeft
+        case (false, true): return .avoidRight
+        case (false, false): return .blocked
+        case (true, true):
+            let centre = ahead.map(\.midX).reduce(0, +) / Double(ahead.count)
+            return centre > 0.5 ? .avoidLeft : .avoidRight
+        }
+    }
+}
+
 extension ObstacleDetector: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
@@ -106,13 +144,13 @@ extension ObstacleDetector: AVCaptureVideoDataOutputSampleBufferDelegate {
             held = []
         }
 
-        let isBlocked = held.contains { $0.boundingBox.intersects(zone) }
+        let verdict = decide(held.map(\.boundingBox))
         let labels = held.map { "\($0.labels.first?.identifier ?? "object") · \(Int($0.confidence * 100))%" }
         DispatchQueue.main.async {
             guard self.isRunning else { return }
-            self.blocked = isBlocked
+            self.verdict = verdict
             self.objects = labels
-            self.onFrame?(isBlocked)
+            self.onFrame?(verdict)
         }
     }
 }

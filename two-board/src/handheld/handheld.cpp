@@ -34,6 +34,15 @@ int topSpeed = 220;
 int speedValue = topSpeed;
 int rampFrom = RAMP_START, rampTo = 220;
 unsigned long rampDuration = RAMP_MS;
+// Going around obstacles: when the camera reports the centre blocked but one side free
+// (CAM:AVOID:LEFT / CAM:AVOID:RIGHT) while driving forward, turn on the spot toward the free side
+// until the centre is clear, keep turning a little longer, then carry on forward.
+const unsigned long AVOID_EXTRA_MS = 300;   // keep turning this long after the centre clears
+const unsigned long AVOID_MAX_MS = 4000;    // about half a turn; give up and stop after this
+const int AVOID_TURN_SPEED = 170;
+bool avoiding = false;
+unsigned long avoidStarted = 0, avoidClearSince = 0;
+
 long lastPosition = 0;
 uint32_t epoch = 1;
 unsigned long lastHost = 0, lastHeartbeat = 0, lastStatus = 0;
@@ -64,6 +73,7 @@ void stopRover(const char *reason) {
     calibrating = false;
   }
   ramping = false;
+  avoiding = false;
   speedValue = topSpeed;
   direction = STOPPED; ++epoch;
   cancelPattern();
@@ -82,6 +92,33 @@ void onButtonPress() {
   if (captureBusy) return;  // a clip is still being recorded or sent
   report("LISTEN:Encoder pressed");
 }
+void startRamp() {
+  rampFrom = min(RAMP_START, topSpeed); rampTo = topSpeed; rampDuration = RAMP_MS;
+  speedValue = rampFrom;
+  rampStarted = millis();
+  ramping = true;
+}
+void startAvoid(Direction side) {
+  avoiding = true;
+  avoidStarted = millis();
+  avoidClearSince = 0;
+  direction = side;
+  ramping = false;
+  speedValue = min(AVOID_TURN_SPEED, topSpeed);
+  playNavCue(side == LEFT ? "LEFT" : "RIGHT");
+  drivePacket();
+  reportf("AVOID:%s", side == LEFT ? "LEFT" : "RIGHT");
+  reportStatus();
+}
+void finishAvoid() {
+  avoiding = false;
+  direction = FORWARD;
+  startRamp();
+  playNavCue("STRAIGHT");
+  drivePacket();
+  report("AVOID:Done");
+  reportStatus();
+}
 bool cameraClear() {
   return !REQUIRE_CAMERA || (cameraReady && !cameraBlocked);
 }
@@ -94,16 +131,25 @@ void processCommand(const String &line, bool fromBle = false) {
   if (line == "PING") { lastHost = millis(); hostAlive = true; return; }
   if (line == "STATUS") { reportStatus(); return; }
   if (line == "STOP") { stopRover("Host stop"); return; }
-  if (line == "CAM:CLEAR" || line == "CAM:BLOCK") {
+  if (line == "CAM:CLEAR" || line == "CAM:BLOCK" || line.startsWith("CAM:AVOID:")) {
     cameraReady = true;
-    cameraBlocked = line == "CAM:BLOCK";
+    cameraBlocked = line != "CAM:CLEAR";
     lastCameraFrame = millis();
-    if (REQUIRE_CAMERA && cameraBlocked && direction == FORWARD) stopRover("Camera obstacle");
+    bool driving = direction == FORWARD || avoiding;
+    if (line == "CAM:CLEAR") {
+      if (avoiding && !avoidClearSince) avoidClearSince = millis();
+    } else if (line == "CAM:BLOCK") {
+      if (REQUIRE_CAMERA && driving) stopRover(avoiding ? "No way around the obstacle" : "Camera obstacle");
+    } else if (avoiding) {
+      avoidClearSince = 0;  // still blocked: keep turning the same way
+    } else if (direction == FORWARD) {
+      startAvoid(line == "CAM:AVOID:LEFT" ? LEFT : RIGHT);
+    }
     return;
   }
   if (line == "CAM:OFF") {
     cameraReady = false;
-    if (REQUIRE_CAMERA && direction == FORWARD) stopRover("Camera off");
+    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) stopRover("Camera off");
     return;
   }
   if (line.startsWith("NAV:")) {
@@ -153,15 +199,13 @@ void processCommand(const String &line, bool fromBle = false) {
     report("ERROR:Stale voice command or stop held"); return;
   }
   if (word == "forward" && !cameraClear()) { refuse("Camera has not reported a clear path"); return; }
+  avoiding = false;  // a spoken command takes over from going around
   if (word == "forward") direction = FORWARD;
   else if (word == "reverse") direction = REVERSE;
   else if (word == "left") direction = LEFT;
   else if (word == "right") direction = RIGHT;
   else { report("ERROR:Unknown voice command"); return; }
-  rampFrom = min(RAMP_START, topSpeed); rampTo = topSpeed; rampDuration = RAMP_MS;
-  speedValue = rampFrom;
-  rampStarted = millis();
-  ramping = true;
+  startRamp();
   digitalWrite(P2_IO2, LOW);
   tone(P3_IO1, 1400, 80);
   drivePacket(); reportStatus();
@@ -194,10 +238,20 @@ void loop() {
   if (stopPressed && !previousStop) stopRover("Physical stop");
   previousStop = stopPressed;
   unsigned long now = millis();
-  if (hostAlive && now-lastHost > 1200) { hostAlive=false; stopRover("Host heartbeat lost"); }
+  if (hostAlive && now-lastHost > 1200) {
+    hostAlive = false;
+    // Only a moving rover needs stopping. Stopping an already stopped one would bump the epoch
+    // and reject a voice command that is still on its way (seen when PINGs lag during audio).
+    if (direction != STOPPED) stopRover("Host heartbeat lost");
+    else report("HOST:Heartbeat lost");
+  }
   if (cameraReady && now-lastCameraFrame > CAMERA_TIMEOUT_MS) {
     cameraReady = false;
-    if (REQUIRE_CAMERA && direction == FORWARD) stopRover("Camera timeout");
+    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) stopRover("Camera timeout");
+  }
+  if (avoiding) {
+    if (avoidClearSince && now - avoidClearSince >= AVOID_EXTRA_MS) finishAvoid();
+    else if (now - avoidStarted > AVOID_MAX_MS) stopRover("Could not find a way around");
   }
   String bleCommand;
   while (nextBleCommand(bleCommand)) processCommand(bleCommand, true);

@@ -46,10 +46,12 @@ The receiver obeys only the handheld's MAC address, and stops its motors if no c
 | Host → handheld | `RECORD` / `VOICE:<epoch>:<word>` / `STOP` | Request a clip, run a recognised word, stop |
 | Host → handheld | `CAL:<move>:<ms>` | Calibration run |
 | Host → handheld | `CAM:CLEAR` / `CAM:BLOCK` / `CAM:OFF` | Camera frames; forward needs a clear one in the last 2 s |
+| Host → handheld | `CAM:AVOID:LEFT` / `CAM:AVOID:RIGHT` | Centre blocked, that side free: go around that way while driving forward |
 | Host → handheld | `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` / `NAV:ARRIVED` | Buzzer turn cue, only while moving |
 | Handheld → host | `LISTEN:...` | Encoder clicked; host should send `RECORD` |
 | Handheld → host | `AUDIO_BEGIN:<epoch>` / audio / `AUDIO_END:<epoch>:<bytes>` | A 3 s clip, 16 kHz 16-bit mono. USB: `PCM:<hex>` lines. Bluetooth: raw bytes on the audio characteristic |
 | Handheld → host | `REFUSED:...` / `NAV:...` | Forward refused (camera), cue played or ignored |
+| Handheld → host | `AVOID:LEFT` / `AVOID:RIGHT` / `AVOID:Done` | Going around an obstacle, then back to forward |
 | Handheld → host | `STATE:...`, `STOP:...`, `ERROR:...` | Status lines |
 
 ### Not done yet
