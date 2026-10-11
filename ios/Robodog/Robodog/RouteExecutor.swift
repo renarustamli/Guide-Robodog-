@@ -150,7 +150,7 @@ final class RouteExecutor: ObservableObject {
             status = "Leg \(index + 1) of \(route?.legs.count ?? 0): \(route?.legs[index].spoken ?? "")"
             scheduleLegEnd(after: remaining)
         } else if isRunning, line.hasPrefix("REFUSED:") {
-            cancel(announce: "I can't go forward. The path ahead isn't clear. Route cancelled.")
+            cancel(announce: line.contains("Camera is off") ? "Start the camera first. Route cancelled." : "I can't go forward. Route cancelled.")
         } else if isRunning, line.hasPrefix("STOP:"), phase != .waitingForStop {
             // A stop we didn't ask for: physical button, camera obstacle, lost heartbeat.
             cancel(announce: "Stopped. Route cancelled.", sendStop: false)

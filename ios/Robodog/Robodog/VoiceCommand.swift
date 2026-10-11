@@ -116,7 +116,7 @@ final class VoiceCommand: ObservableObject {
         } else if line.hasPrefix("REFUSED:") {
             // Intelligent disobedience: the board would not move forward.
             finishDrive()
-            say("I can't go forward. The path ahead isn't clear.")
+            say(line.contains("Camera is off") ? "I can't go forward. Start the camera first." : "I can't go forward.")
         }
     }
 
