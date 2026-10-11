@@ -120,6 +120,8 @@ void processCommand(const String &line, bool fromBle = false) {
         (move != "forward" && move != "right" && move != "left")) {
       report("ERROR:Invalid calibration (100 to 10000 ms, forward/left/right)"); return;
     }
+    // Turns run 50% longer than requested (capped at the 10 s limit); forward runs are unchanged.
+    if (move != "forward") duration = min(duration * 3 / 2, 10000L);
     ++epoch;
     direction = move == "forward" ? FORWARD : (move == "right" ? RIGHT : LEFT);
     speedValue = 80; rampStarted = millis(); ramping = true;
