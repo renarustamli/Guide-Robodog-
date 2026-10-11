@@ -21,6 +21,10 @@ final class VoiceCommand: ObservableObject {
     var send: ((String) -> Void)?
     /// Starts a walking route to a place name. Set by the view.
     var startRoute: ((String) -> Void)?
+    /// A found route is waiting for the user to say yes or no.
+    var routePending: (() -> Bool)?
+    var confirmRoute: (() -> Void)?
+    var cancelRoute: (() -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-GB"))
     private let synthesizer = AVSpeechSynthesizer()
@@ -185,9 +189,21 @@ final class VoiceCommand: ObservableObject {
 
         // Stop wins over everything, whatever else was said.
         if Self.has(words, "stop|halt|wait") {
+            cancelRoute?()
             send?("VOICE:\(epoch):stop")
             say("Stopping.")
             return
+        }
+        // A found route is waiting for yes or no; anything else falls through to the normal commands.
+        if routePending?() == true {
+            if Self.has(words, "yes|yeah|yep|okay|ok|sure|confirm|go ahead") {
+                confirmRoute?()
+                return
+            }
+            if Self.has(words, "no|nope|cancel|never mind") {
+                cancelRoute?()
+                return
+            }
         }
         if let place = Self.destination(in: words) {
             startRoute?(place)

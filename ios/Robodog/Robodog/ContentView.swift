@@ -67,7 +67,11 @@ struct ContentView: View {
                             Button("Start route", action: startRoute)
                                 .buttonStyle(.borderedProminent)
                                 .disabled(destination.trimmingCharacters(in: .whitespaces).isEmpty)
-                            Button("Demo route") { guide.playDemo() }
+                            Menu("Demo route") {
+                                ForEach(RouteGuide.demoRoutes.indices, id: \.self) { i in
+                                    Button(RouteGuide.demoRoutes[i].name) { guide.playDemo(i) }
+                                }
+                            }
                                 .buttonStyle(.bordered)
                             if guide.isGuiding {
                                 Button("Stop", role: .destructive) { guide.stop() }
@@ -76,6 +80,15 @@ struct ContentView: View {
                         }
                         .controlSize(.large)
                         Text(guide.instruction).font(.title3)
+                        if guide.pendingName != nil {
+                            HStack {
+                                Button("Yes, go") { guide.confirmPending() }
+                                    .buttonStyle(.borderedProminent)
+                                Button("No", role: .cancel) { guide.cancelPending() }
+                                    .buttonStyle(.bordered)
+                            }
+                            .controlSize(.large)
+                        }
                     }
                 }
 
@@ -93,6 +106,9 @@ struct ContentView: View {
             ble.onAudio = { chunk in voice.append(audio: chunk) }
             ble.onConnectionChange = { _ in voice.reset() }
             voice.send = { command in ble.send(command) }
+            voice.routePending = { guide.pendingName != nil }
+            voice.confirmRoute = { guide.confirmPending() }
+            voice.cancelRoute = { guide.cancelPending() }
             voice.startRoute = { place in
                 destination = place
                 guide.start(to: place)

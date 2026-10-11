@@ -7,16 +7,63 @@ import MapKit
 final class RouteGuide: NSObject, ObservableObject {
     static let cueDistance: CLLocationDistance = 15  // metres before a turn
 
-    // Indoor demo for the hackathon table, where GPS won't move. Same as the browser demo.
-    static let demoRoute: [(cue: String, text: String, wait: TimeInterval)] = [
-        ("STRAIGHT", "Walk in through the main doors, straight for 5 m", 4),
-        ("RIGHT", "Turn right into fruit and veg", 5),
-        ("STRAIGHT", "Continue straight past the produce for 4 m", 4),
-        ("LEFT", "Turn left into aisle 3, bakery and bread", 5),
-        ("STRAIGHT", "Walk down the aisle for 6 m", 5),
-        ("RIGHT", "Turn right at the end of the aisle, towards the chilled section", 5),
-        ("STRAIGHT", "Continue straight for 3 m", 4),
-        ("ARRIVED", "You have arrived at the dairy fridge", 0),
+    // Indoor demos for the hackathon table, where GPS won't move. Same routes as the browser demo.
+    typealias DemoStep = (cue: String, text: String, wait: TimeInterval)
+    static let demoRoutes: [(name: String, steps: [DemoStep])] = [
+        ("Dairy fridge", [
+            ("STRAIGHT", "Walk in through the main doors, straight for 5 m", 4),
+            ("RIGHT", "Turn right into fruit and veg", 5),
+            ("STRAIGHT", "Continue straight past the produce for 4 m", 4),
+            ("LEFT", "Turn left into aisle 3, bakery and bread", 5),
+            ("STRAIGHT", "Walk down the aisle for 6 m", 5),
+            ("RIGHT", "Turn right at the end of the aisle, towards the chilled section", 5),
+            ("STRAIGHT", "Continue straight for 3 m", 4),
+            ("ARRIVED", "You have arrived at the dairy fridge", 0),
+        ]),
+        ("Pharmacy", [
+            ("STRAIGHT", "Walk in through the main doors, straight for 3 m", 4),
+            ("LEFT", "Turn left along the front wall", 5),
+            ("STRAIGHT", "Continue straight past customer service for 6 m", 5),
+            ("RIGHT", "Turn right at the flower display", 5),
+            ("STRAIGHT", "Continue straight for 2 m", 3),
+            ("ARRIVED", "You have arrived at the pharmacy counter", 0),
+        ]),
+        ("Frozen foods", [
+            ("STRAIGHT", "Walk in through the main doors, straight for 4 m", 4),
+            ("RIGHT", "Turn right into aisle 7, tea and coffee", 5),
+            ("STRAIGHT", "Walk down the aisle for 8 m", 6),
+            ("LEFT", "Turn left at the end of the aisle", 5),
+            ("STRAIGHT", "Continue straight along the back wall for 3 m", 4),
+            ("LEFT", "Turn left into the frozen aisle", 5),
+            ("STRAIGHT", "Continue straight for 4 m", 4),
+            ("ARRIVED", "You have arrived at the frozen foods", 0),
+        ]),
+        ("Cafe", [
+            ("STRAIGHT", "Walk straight for 5 m past the trolley bay", 4),
+            ("LEFT", "Turn left past the newspapers", 5),
+            ("STRAIGHT", "Continue straight for 4 m", 4),
+            ("LEFT", "Turn left at the toilets sign", 5),
+            ("STRAIGHT", "Continue straight for 3 m", 4),
+            ("RIGHT", "Turn right into the cafe seating area", 5),
+            ("STRAIGHT", "Continue straight for 2 m", 3),
+            ("ARRIVED", "You have arrived at the cafe counter", 0),
+        ]),
+        ("Checkout", [
+            ("STRAIGHT", "Walk straight out of the aisle for 4 m", 4),
+            ("LEFT", "Turn left towards the tills", 5),
+            ("STRAIGHT", "Continue straight past the bakery counter for 5 m", 5),
+            ("RIGHT", "Turn right into till lane 4", 5),
+            ("STRAIGHT", "Continue straight for 2 m", 3),
+            ("ARRIVED", "You have arrived at till 4", 0),
+        ]),
+        ("Exit", [
+            ("STRAIGHT", "Walk straight past the tills for 3 m", 4),
+            ("RIGHT", "Turn right at the trolley bay", 5),
+            ("STRAIGHT", "Continue straight for 5 m", 5),
+            ("LEFT", "Turn left through the exit doors", 5),
+            ("STRAIGHT", "Continue straight outside for 4 m", 4),
+            ("ARRIVED", "You have arrived at the car park entrance", 0),
+        ]),
     ]
 
     @Published var instruction = "No route."
@@ -31,6 +78,9 @@ final class RouteGuide: NSObject, ObservableObject {
     private var nextStep = 0
     private var destination: CLLocation?
     private var generation = 0
+    private var pendingRoute: MKRoute?
+    /// Set while a found route is waiting for the user to say yes or no.
+    @Published var pendingName: String?
 
     override init() {
         super.init()
@@ -66,15 +116,15 @@ final class RouteGuide: NSObject, ObservableObject {
                     self.onAnnounce?(self.instruction)
                     return
                 }
-                self.begin(route, name: place.name ?? query)
+                self.propose(route, name: place.name ?? query)
             }
         }
     }
 
-    func playDemo() {
+    func playDemo(_ route: Int = 0) {
         stop()
         isGuiding = true
-        demoStep(0, generation)
+        demoStep(route, 0, generation)
     }
 
     func stop() {
@@ -82,8 +132,39 @@ final class RouteGuide: NSObject, ObservableObject {
         location.stopUpdatingLocation()
         steps = []
         destination = nil
+        pendingRoute = nil
+        pendingName = nil
         isGuiding = false
         instruction = "No route."
+    }
+
+    /// A route has been found; ask the user before guiding, so a wrong first search result isn't followed blindly.
+    private func propose(_ route: MKRoute, name: String) {
+        pendingRoute = route
+        pendingName = name
+        let distance = Self.spoken(distance: route.distance)
+        instruction = "\(name), \(distance) away. Go there?"
+        onAnnounce?("\(name), \(distance) away. Shall I take you there? Say yes or no.")
+    }
+
+    func confirmPending() {
+        guard let route = pendingRoute, let name = pendingName else { return }
+        pendingRoute = nil
+        pendingName = nil
+        begin(route, name: name)
+    }
+
+    func cancelPending() {
+        guard pendingRoute != nil else { return }
+        pendingRoute = nil
+        pendingName = nil
+        instruction = "Route cancelled."
+        onAnnounce?("Okay, cancelled.")
+    }
+
+    private static func spoken(distance metres: CLLocationDistance) -> String {
+        if metres < 1000 { return "\(Int((metres / 10).rounded()) * 10) metres" }
+        return String(format: "%.1f kilometres", metres / 1000)
     }
 
     private func begin(_ route: MKRoute, name: String) {
@@ -98,13 +179,14 @@ final class RouteGuide: NSObject, ObservableObject {
         location.startUpdatingLocation()
     }
 
-    private func demoStep(_ index: Int, _ current: Int) {
+    private func demoStep(_ route: Int, _ index: Int, _ current: Int) {
         guard current == generation else { return }
-        let step = Self.demoRoute[index]
+        let steps = Self.demoRoutes[route].steps
+        let step = steps[index]
         onCue?(step.cue)
-        instruction = "Demo \(index + 1)/\(Self.demoRoute.count): \(step.text)"
-        if index + 1 < Self.demoRoute.count {
-            DispatchQueue.main.asyncAfter(deadline: .now() + step.wait) { self.demoStep(index + 1, current) }
+        instruction = "Demo \(index + 1)/\(steps.count): \(step.text)"
+        if index + 1 < steps.count {
+            DispatchQueue.main.asyncAfter(deadline: .now() + step.wait) { self.demoStep(route, index + 1, current) }
         } else {
             isGuiding = false
         }
