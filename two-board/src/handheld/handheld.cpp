@@ -27,7 +27,13 @@ unsigned long lastCameraFrame = 0;
 enum Direction { STOPPED, FORWARD, REVERSE, LEFT, RIGHT };
 RotaryEncoder encoder(P1_IO1, P1_IO2, RotaryEncoder::LatchMode::TWO03);
 Direction direction = STOPPED;
-int speedValue = 160;
+// Motor power is PWM 0..255. Drive commands ramp from RAMP_START up to topSpeed, which the encoder sets.
+const int RAMP_START = 120;
+const unsigned long RAMP_MS = 2000;
+int topSpeed = 220;
+int speedValue = topSpeed;
+int rampFrom = RAMP_START, rampTo = 220;
+unsigned long rampDuration = RAMP_MS;
 long lastPosition = 0;
 uint32_t epoch = 1;
 unsigned long lastHost = 0, lastHeartbeat = 0, lastStatus = 0;
@@ -58,6 +64,7 @@ void stopRover(const char *reason) {
     calibrating = false;
   }
   ramping = false;
+  speedValue = topSpeed;
   direction = STOPPED; ++epoch;
   cancelPattern();
   digitalWrite(P2_IO2, HIGH);
@@ -122,7 +129,8 @@ void processCommand(const String &line, bool fromBle = false) {
     }
     ++epoch;
     direction = move == "forward" ? FORWARD : (move == "right" ? RIGHT : LEFT);
-    speedValue = 80; rampStarted = millis(); ramping = true;
+    speedValue = 80; rampFrom = 80; rampTo = 160; rampDuration = 4000;
+    rampStarted = millis(); ramping = true;
     calibrating = true; calibrationStarted = rampStarted; calibrationDuration = duration;
     digitalWrite(P2_IO2, LOW);
     reportf("CAL:Started %s for %ld ms, ramp 80 to 160 over 4 s", move.c_str(), duration);
@@ -150,7 +158,8 @@ void processCommand(const String &line, bool fromBle = false) {
   else if (word == "left") direction = LEFT;
   else if (word == "right") direction = RIGHT;
   else { report("ERROR:Unknown voice command"); return; }
-  speedValue = 80;
+  rampFrom = min(RAMP_START, topSpeed); rampTo = topSpeed; rampDuration = RAMP_MS;
+  speedValue = rampFrom;
   rampStarted = millis();
   ramping = true;
   digitalWrite(P2_IO2, LOW);
@@ -176,7 +185,8 @@ void loop() {
   if (position != lastPosition) {
     if (calibrating) stopRover("Encoder adjusted during calibration");
     ramping = false;
-    speedValue = constrain(speedValue + (position-lastPosition)*5, 0L, 255L);
+    topSpeed = constrain(topSpeed + (position-lastPosition)*5, 0L, 255L);
+    speedValue = topSpeed;
     lastPosition = position;
     tone(P3_IO1, 1000, 15); reportStatus();
   }
@@ -202,8 +212,8 @@ void loop() {
   if (calibrating && millis()-calibrationStarted >= calibrationDuration) stopRover("Calibration complete");
   if (ramping) {
     unsigned long elapsed = millis() - rampStarted;
-    if (elapsed >= 4000) { speedValue = 160; ramping = false; }
-    else speedValue = 80 + (elapsed * 80UL) / 4000UL;
+    if (elapsed >= rampDuration) { speedValue = rampTo; ramping = false; }
+    else speedValue = rampFrom + (long)(elapsed * (rampTo - rampFrom)) / (long)rampDuration;
   }
   if (now-lastHeartbeat >= 100) { lastHeartbeat=now; drivePacket(); }
   if (now-lastStatus >= 500) { lastStatus=now; reportStatus(); }
