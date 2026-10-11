@@ -73,6 +73,10 @@ final class RouteExecutor: ObservableObject {
     private var epoch: UInt32 = 0
     private var generation = 0
     private var timeout: DispatchWorkItem?
+    /// Ends the current forward/turn leg. Paused while the board goes around an obstacle.
+    private var legTimer: DispatchWorkItem?
+    private var legEndsAt = Date()
+    private var legRemaining: TimeInterval?
 
     /// The scripted route for a place name, or nil if it isn't one of the dummy places.
     static func route(for place: String) -> Route? {
@@ -102,6 +106,8 @@ final class RouteExecutor: ObservableObject {
         guard isRunning else { return }
         generation += 1
         timeout?.cancel()
+        legTimer?.cancel()
+        legRemaining = nil
         isRunning = false
         phase = .idle
         route = nil
@@ -123,12 +129,7 @@ final class RouteExecutor: ObservableObject {
             case .waitingForMove where direction == route.legs[index].word:
                 timeout?.cancel()
                 phase = .moving
-                let current = generation
-                let leg = route.legs[index]
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.duration(of: leg)) { [weak self] in
-                    guard let self, current == self.generation, self.phase == .moving else { return }
-                    self.endLeg()
-                }
+                scheduleLegEnd(after: Self.duration(of: route.legs[index]))
             case .waitingForStop where direction == "stop":
                 timeout?.cancel()
                 index += 1
@@ -140,6 +141,15 @@ final class RouteExecutor: ObservableObject {
             default:
                 break
             }
+        } else if isRunning, phase == .moving, line == "AVOID:LEFT" || line == "AVOID:RIGHT" {
+            // The board is detouring around an obstacle: pause the leg so the detour doesn't use it up.
+            legTimer?.cancel()
+            legRemaining = max(0, legEndsAt.timeIntervalSinceNow)
+            status = "Going around an obstacle…"
+        } else if isRunning, phase == .moving, line == "AVOID:Done", let remaining = legRemaining {
+            legRemaining = nil
+            status = "Leg \(index + 1) of \(route?.legs.count ?? 0): \(route?.legs[index].spoken ?? "")"
+            scheduleLegEnd(after: remaining)
         } else if isRunning, line.hasPrefix("REFUSED:") {
             cancel(announce: "I can't go forward. The path ahead isn't clear. Route cancelled.")
         } else if isRunning, line.hasPrefix("STOP:"), phase != .waitingForStop {
@@ -172,6 +182,18 @@ final class RouteExecutor: ObservableObject {
         phase = .waitingForMove
         send?("VOICE:\(epoch):\(leg.word)")
         armTimeout("The robot didn't respond. Route cancelled.")
+    }
+
+    private func scheduleLegEnd(after seconds: TimeInterval) {
+        legTimer?.cancel()
+        legEndsAt = Date().addingTimeInterval(seconds)
+        let current = generation
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, current == self.generation, self.phase == .moving else { return }
+            self.endLeg()
+        }
+        legTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
     private func endLeg() {

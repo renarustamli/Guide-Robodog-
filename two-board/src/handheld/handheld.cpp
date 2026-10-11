@@ -34,14 +34,24 @@ int topSpeed = 220;
 int speedValue = topSpeed;
 int rampFrom = RAMP_START, rampTo = 220;
 unsigned long rampDuration = RAMP_MS;
-// Going around obstacles: when the camera reports the centre blocked but one side free
-// (CAM:AVOID:LEFT / CAM:AVOID:RIGHT) while driving forward, turn on the spot toward the free side
-// until the centre is clear, keep turning a little longer, then carry on forward.
+// Going around obstacles and rejoining the path. When the camera reports the centre blocked but one
+// side free (CAM:AVOID:LEFT / CAM:AVOID:RIGHT) while driving forward:
+//   TURN_OUT  turn toward the free side until the centre is clear (+AVOID_EXTRA_MS); its length is T
+//   PASS      forward for AVOID_PASS_MS, alongside the obstacle
+//   TURN_BACK turn the other way for 2T, now pointing back toward the original line
+//   RETURN    forward for AVOID_PASS_MS, back onto the line
+//   ALIGN     turn the first way for T, facing the original heading again, then carry on forward
+// The two sideways legs mirror each other, so the rover ends up on the same line. Timing based
+// (no wheel sensors), so approximate: tune AVOID_PASS_MS and the speed on the real floor.
+enum AvoidPhase { AVOID_NONE, TURN_OUT, PASS, TURN_BACK, RETURN_TO_LINE, ALIGN };
 const unsigned long AVOID_EXTRA_MS = 300;   // keep turning this long after the centre clears
 const unsigned long AVOID_MAX_MS = 4000;    // about half a turn; give up and stop after this
-const int AVOID_TURN_SPEED = 170;
-bool avoiding = false;
-unsigned long avoidStarted = 0, avoidClearSince = 0;
+const unsigned long AVOID_PASS_MS = 1500;   // each forward leg of the detour
+const int AVOID_SPEED = 170;                // fixed speed for the whole detour, so turns mirror
+AvoidPhase avoidPhase = AVOID_NONE;
+Direction avoidSide = LEFT;
+unsigned long phaseStarted = 0, avoidClearSince = 0, turnOutMs = 0;
+bool avoiding = false;  // avoidPhase != AVOID_NONE
 
 long lastPosition = 0;
 uint32_t epoch = 1;
@@ -74,6 +84,7 @@ void stopRover(const char *reason) {
   }
   ramping = false;
   avoiding = false;
+  avoidPhase = AVOID_NONE;
   speedValue = topSpeed;
   direction = STOPPED; ++epoch;
   cancelPattern();
@@ -98,19 +109,27 @@ void startRamp() {
   rampStarted = millis();
   ramping = true;
 }
-void startAvoid(Direction side) {
+const char *sideName(Direction side) { return side == LEFT ? "LEFT" : "RIGHT"; }
+Direction opposite(Direction side) { return side == LEFT ? RIGHT : LEFT; }
+void enterPhase(AvoidPhase phase, Direction move) {
+  avoidPhase = phase;
   avoiding = true;
-  avoidStarted = millis();
-  avoidClearSince = 0;
-  direction = side;
+  phaseStarted = millis();
+  direction = move;
   ramping = false;
-  speedValue = min(AVOID_TURN_SPEED, topSpeed);
-  playNavCue(side == LEFT ? "LEFT" : "RIGHT");
+  speedValue = min(AVOID_SPEED, topSpeed);
   drivePacket();
-  reportf("AVOID:%s", side == LEFT ? "LEFT" : "RIGHT");
   reportStatus();
 }
+void startAvoid(Direction side) {
+  avoidSide = side;
+  avoidClearSince = 0;
+  playNavCue(sideName(side));
+  reportf("AVOID:%s", sideName(side));
+  enterPhase(TURN_OUT, side);
+}
 void finishAvoid() {
+  avoidPhase = AVOID_NONE;
   avoiding = false;
   direction = FORWARD;
   startRamp();
@@ -135,15 +154,20 @@ void processCommand(const String &line, bool fromBle = false) {
     cameraReady = true;
     cameraBlocked = line != "CAM:CLEAR";
     lastCameraFrame = millis();
-    bool driving = direction == FORWARD || avoiding;
-    if (line == "CAM:CLEAR") {
-      if (avoiding && !avoidClearSince) avoidClearSince = millis();
-    } else if (line == "CAM:BLOCK") {
-      if (REQUIRE_CAMERA && driving) stopRover(avoiding ? "No way around the obstacle" : "Camera obstacle");
-    } else if (avoiding) {
-      avoidClearSince = 0;  // still blocked: keep turning the same way
-    } else if (direction == FORWARD) {
-      startAvoid(line == "CAM:AVOID:LEFT" ? LEFT : RIGHT);
+    bool clear = line == "CAM:CLEAR";
+    if (avoidPhase == TURN_OUT) {
+      // Turning away: wait for a clear centre. Both sides blocked means there's no way around.
+      if (clear) { if (!avoidClearSince) avoidClearSince = millis(); }
+      else if (line == "CAM:BLOCK") { if (REQUIRE_CAMERA) stopRover("No way around the obstacle"); }
+      else avoidClearSince = 0;
+    } else if (avoidPhase == PASS || avoidPhase == RETURN_TO_LINE) {
+      // Driving a detour leg: anything ahead now is a second obstacle, so stop.
+      if (!clear && REQUIRE_CAMERA) stopRover("Obstacle while going around");
+    } else if (avoidPhase == TURN_BACK || avoidPhase == ALIGN) {
+      // Turning back toward the line sweeps the camera across the obstacle we are passing: ignore.
+    } else if (direction == FORWARD && !clear) {
+      if (line == "CAM:BLOCK") { if (REQUIRE_CAMERA) stopRover("Camera obstacle"); }
+      else startAvoid(line == "CAM:AVOID:LEFT" ? LEFT : RIGHT);
     }
     return;
   }
@@ -200,6 +224,7 @@ void processCommand(const String &line, bool fromBle = false) {
   }
   if (word == "forward" && !cameraClear()) { refuse("Camera has not reported a clear path"); return; }
   avoiding = false;  // a spoken command takes over from going around
+  avoidPhase = AVOID_NONE;
   if (word == "forward") direction = FORWARD;
   else if (word == "reverse") direction = REVERSE;
   else if (word == "left") direction = LEFT;
@@ -249,9 +274,35 @@ void loop() {
     cameraReady = false;
     if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) stopRover("Camera timeout");
   }
-  if (avoiding) {
-    if (avoidClearSince && now - avoidClearSince >= AVOID_EXTRA_MS) finishAvoid();
-    else if (now - avoidStarted > AVOID_MAX_MS) stopRover("Could not find a way around");
+  unsigned long inPhase = now - phaseStarted;
+  switch (avoidPhase) {
+    case TURN_OUT:
+      if (avoidClearSince && now - avoidClearSince >= AVOID_EXTRA_MS) {
+        turnOutMs = inPhase;
+        report("AVOID:Passing");
+        enterPhase(PASS, FORWARD);
+      } else if (inPhase > AVOID_MAX_MS) {
+        stopRover("Could not find a way around");
+      }
+      break;
+    case PASS:
+      if (inPhase >= AVOID_PASS_MS) {
+        playNavCue(sideName(opposite(avoidSide)));
+        report("AVOID:Rejoining");
+        enterPhase(TURN_BACK, opposite(avoidSide));
+      }
+      break;
+    case TURN_BACK:
+      if (inPhase >= 2 * turnOutMs) enterPhase(RETURN_TO_LINE, FORWARD);
+      break;
+    case RETURN_TO_LINE:
+      if (inPhase >= AVOID_PASS_MS) enterPhase(ALIGN, avoidSide);
+      break;
+    case ALIGN:
+      if (inPhase >= turnOutMs) finishAvoid();
+      break;
+    case AVOID_NONE:
+      break;
   }
   String bleCommand;
   while (nextBleCommand(bleCommand)) processCommand(bleCommand, true);

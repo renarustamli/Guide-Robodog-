@@ -51,7 +51,7 @@ The receiver obeys only the handheld's MAC address, and stops its motors if no c
 | Handheld → host | `LISTEN:...` | Encoder clicked; host should send `RECORD` |
 | Handheld → host | `AUDIO_BEGIN:<epoch>` / audio / `AUDIO_END:<epoch>:<bytes>` | A 3 s clip, 16 kHz 16-bit mono. USB: `PCM:<hex>` lines. Bluetooth: raw bytes on the audio characteristic |
 | Handheld → host | `REFUSED:...` / `NAV:...` | Forward refused (camera), cue played or ignored |
-| Handheld → host | `AVOID:LEFT` / `AVOID:RIGHT` / `AVOID:Done` | Going around an obstacle, then back to forward |
+| Handheld → host | `AVOID:LEFT` / `AVOID:RIGHT`, `AVOID:Passing`, `AVOID:Rejoining`, `AVOID:Done` | Detour around an obstacle, back onto the original line |
 | Handheld → host | `STATE:...`, `STOP:...`, `ERROR:...` | Status lines |
 
 ### Not done yet
