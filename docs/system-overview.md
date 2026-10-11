@@ -59,17 +59,39 @@ Defined in [`axiometa.json`](../axiometa.json). All four modules sit on the hand
 **Firmware** ([`firmware/`](../firmware/)) — control test, no motors connected yet.
 - Starts only when the camera reports a clear path (intelligent disobedience).
 - Stops and beeps on: stop button, camera `BLOCK`, camera off, or no camera frame for 2 s.
+- Plays navigation cues on the handle buzzer while running (see below). Stop beeps cancel any cue.
+
+- Bluetooth LE as "Robodog" ([`firmware/ble.h`](../firmware/ble.h), Nordic UART Service). Accepts the same messages as USB; status lines go to both.
+
+**iPhone app** ([`ios/`](../ios/README.md)) — rides on the chassis and replaces the Mac. Rear-camera obstacle detection, Apple Maps walking route with turn cues, Bluetooth link. See the setup guide in `ios/README.md`.
 
 **Browser** ([`browser/Camera Test.html`](../browser/Camera%20Test.html)) — runs in Axiometa Studio on a computer connected by USB.
 - Object detection with TensorFlow.js COCO-SSD. An object overlapping the centre zone sends `CAM:BLOCK`.
+- Navigation cue buttons and a timed demo route that send `NAV:` cues to the board.
 
 ### Serial protocol
+
+Messages travel over USB serial (Camera Test) or Bluetooth (iPhone app), one per line.
 
 | Direction | Message | Meaning |
 |---|---|---|
 | Browser → board | `CAM:CLEAR` / `CAM:BLOCK` | Latest detection frame (about every 200 ms) |
 | Browser → board | `CAM:OFF` | Camera stopped |
+| Browser → board | `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` / `NAV:ARRIVED` | Navigation cue (ignored while stopped) |
 | Board → browser | `Running ...` / `Stopped ...` / `Start blocked ...` | Status lines |
+| Board → browser | `Nav cue: ...` / `Nav ignored: ...` | Navigation cue result |
+
+### Haptic patterns (handle buzzer)
+
+| Cue | Pattern |
+|---|---|
+| Stop / obstacle | One 2000 Hz beep, 300 ms. Always overrides other cues. |
+| Left | Two short beeps (1500 Hz) |
+| Right | One long beep (1500 Hz, 600 ms) |
+| Straight | One short low beep (1000 Hz) |
+| Arrived | Three rising beeps |
+
+The browser page and the iPhone app both have a timed demo route. The iPhone app also does real routes with Apple Maps. Later the same `NAV:` messages can drive the motors.
 
 ### Not done yet
 - Motors and steering
