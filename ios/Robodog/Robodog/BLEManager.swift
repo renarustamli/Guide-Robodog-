@@ -29,6 +29,8 @@ final class BLEManager: NSObject, ObservableObject {
     var onLine: ((String) -> Void)?
     /// Raw audio chunks between AUDIO_BEGIN and AUDIO_END, on the main thread.
     var onAudio: ((Data) -> Void)?
+    /// Called on the main thread whenever the board connects or disconnects.
+    var onConnectionChange: ((Bool) -> Void)?
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -61,6 +63,7 @@ final class BLEManager: NSObject, ObservableObject {
         rx = nil
         isConnected = false
         handheld = nil
+        onConnectionChange?(false)
         if central.state == .poweredOn { scan() }
     }
 
@@ -137,6 +140,7 @@ extension BLEManager: CBPeripheralDelegate {
         if rx != nil {
             isConnected = true
             state = "Connected to Robodog"
+            onConnectionChange?(true)
             startHeartbeat()
         }
     }

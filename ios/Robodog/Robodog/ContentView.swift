@@ -32,6 +32,11 @@ struct ContentView: View {
                             .controlSize(.large)
                             .disabled(!ble.isConnected)
                         Toggle("Spoken replies", isOn: $voice.spokenReplies)
+                        if voice.hasClip {
+                            Text(voice.clipInfo).font(.footnote).foregroundStyle(.secondary)
+                            Button("Play last recording", action: voice.playLastClip)
+                                .buttonStyle(.bordered)
+                        }
                     }
                 }
 
@@ -86,6 +91,7 @@ struct ContentView: View {
             guide.onAnnounce = { text in voice.say(text) }
             ble.onLine = { line in voice.handle(line: line) }
             ble.onAudio = { chunk in voice.append(audio: chunk) }
+            ble.onConnectionChange = { _ in voice.reset() }
             voice.send = { command in ble.send(command) }
             voice.startRoute = { place in
                 destination = place

@@ -11,7 +11,8 @@
 #include <freertos/queue.h>
 
 static const size_t VOICE_CLIP_BYTES = 96000;      // 3 s, long enough for "guide me to Tesco"
-static const unsigned long BLE_AUDIO_PACE_MS = 6;  // gap between notifications so none are dropped
+static const unsigned long BLE_AUDIO_PACE_MS = 6;    // gap between audio notifications
+static const unsigned long BLE_AUDIO_BACKOFF_MS = 25;  // wait after the Bluetooth buffers were full
 
 static I2SClass i2s;
 static uint8_t *recording = nullptr;
@@ -71,10 +72,13 @@ static void pollVoice() {
 
   if (audioToBle) {
     if (!bleConnected) { transferring = false; captureBusy = false; report("ERROR:Bluetooth lost during audio"); return; }
-    if (millis() - lastAudioPacket < BLE_AUDIO_PACE_MS) return;
+    static unsigned long wait = BLE_AUDIO_PACE_MS;
+    if (millis() - lastAudioPacket < wait) return;
     lastAudioPacket = millis();
     size_t n = min(bleAudioChunk(), VOICE_CLIP_BYTES - audioOffset);
-    bleSendAudio(recording + audioOffset, n);
+    // Only move on when the chunk was accepted; otherwise back off and resend the same chunk.
+    if (!bleSendAudio(recording + audioOffset, n)) { wait = BLE_AUDIO_BACKOFF_MS; return; }
+    wait = BLE_AUDIO_PACE_MS;
     audioOffset += n;
     if (audioOffset == VOICE_CLIP_BYTES) finishTransfer();
     return;

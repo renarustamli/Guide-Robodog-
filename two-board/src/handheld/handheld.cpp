@@ -68,10 +68,11 @@ void stopRover(const char *reason) {
 }
 void onButtonPress() {
   if (!hostAlive || millis() - lastHost > 1200 || digitalRead(P2_IO1) == LOW) {
-    report("ERROR:Release stop and connect voice panel before starting");
+    report("ERROR:Release stop and connect the iPhone app (or Studio) before starting");
     return;
   }
   if (calibrating) return;
+  if (captureBusy) return;  // a clip is still being recorded or sent
   report("LISTEN:Encoder pressed");
 }
 bool cameraClear() {
@@ -131,7 +132,7 @@ void processCommand(const String &line, bool fromBle = false) {
     report("ERROR:Stop calibration before using voice"); return;
   }
   if (line == "RECORD") {
-    if (!hostAlive || digitalRead(P2_IO1) == LOW) { report("ERROR:Release stop and connect voice panel"); return; }
+    if (!hostAlive || digitalRead(P2_IO1) == LOW) { report("ERROR:Release stop and connect the iPhone app (or Studio)"); return; }
     requestVoice(epoch, fromBle); return;
   }
   if (!line.startsWith("VOICE:")) return;

@@ -21,6 +21,14 @@ static BLECharacteristic *bleTx = nullptr, *bleAudio = nullptr;
 static volatile bool bleConnected = false;
 // BLE callbacks run on another task, so commands are queued and handled in loop().
 static QueueHandle_t bleCommands;
+// Set by the status callback when a notification could not be queued (Bluetooth buffers full).
+static volatile bool bleNotifyFailed = false;
+
+class RobodogNotifyCallbacks : public BLECharacteristicCallbacks {
+  void onStatus(BLECharacteristic *, Status status, uint32_t) override {
+    if (status == ERROR_GATT) bleNotifyFailed = true;
+  }
+};
 
 class RobodogServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *) override { bleConnected = true; }
@@ -57,9 +65,10 @@ static void initBle() {
   bleServer->setCallbacks(new RobodogServerCallbacks());
   BLEService *service = bleServer->createService(NUS_SERVICE);
   bleTx = service->createCharacteristic(NUS_TX, BLECharacteristic::PROPERTY_NOTIFY);
-  bleTx->addDescriptor(new BLE2902());
   bleAudio = service->createCharacteristic(ROBODOG_AUDIO, BLECharacteristic::PROPERTY_NOTIFY);
-  bleAudio->addDescriptor(new BLE2902());
+  static RobodogNotifyCallbacks notifyCallbacks;
+  bleTx->setCallbacks(&notifyCallbacks);
+  bleAudio->setCallbacks(&notifyCallbacks);
   BLECharacteristic *rx = service->createCharacteristic(
       NUS_RX, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
   rx->setCallbacks(new RobodogRxCallbacks());
@@ -77,17 +86,21 @@ static bool nextBleCommand(String &command) {
   return true;
 }
 
-/// Largest audio chunk that fits one notification at the negotiated MTU.
+/// Largest audio chunk that fits one notification at the negotiated MTU. Always even, so a dropped
+/// chunk never splits a 16-bit sample and shifts the rest of the clip.
 static size_t bleAudioChunk() {
   uint16_t mtu = bleServer ? bleServer->getPeerMTU(bleServer->getConnId()) : 0;
   if (mtu <= 23) return 20;
-  return min((size_t)(mtu - 3), (size_t)240);
+  return min((size_t)(mtu - 3), (size_t)240) & ~(size_t)1;
 }
 
-static void bleSendAudio(const uint8_t *data, size_t length) {
-  if (!bleConnected || !bleAudio) return;
+/// Returns false if the Bluetooth buffers were full and the chunk was not sent; send it again later.
+static bool bleSendAudio(const uint8_t *data, size_t length) {
+  if (!bleConnected || !bleAudio) return false;
+  bleNotifyFailed = false;
   bleAudio->setValue(const_cast<uint8_t *>(data), length);
   bleAudio->notify();
+  return !bleNotifyFailed;
 }
 
 /// A status line to USB serial (Studio) and Bluetooth (iPhone app).
@@ -95,7 +108,13 @@ static void report(const String &message) {
   Serial.println(message);
   if (bleConnected && bleTx) {
     bleTx->setValue(message.c_str());
-    bleTx->notify();
+    // Retry briefly if the buffers are full (e.g. during audio), so lines like AUDIO_END are not lost.
+    for (int attempt = 0; attempt < 10 && bleConnected; ++attempt) {
+      bleNotifyFailed = false;
+      bleTx->notify();
+      if (!bleNotifyFailed) break;
+      delay(10);
+    }
   }
 }
 

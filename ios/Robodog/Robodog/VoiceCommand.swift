@@ -13,6 +13,9 @@ final class VoiceCommand: ObservableObject {
     @Published var reply = ""
     /// Speak replies through the phone speaker. Off = buzzer feedback only.
     @Published var spokenReplies = true
+    /// Size and loudness of the last clip, to check the handle microphone.
+    @Published var clipInfo = ""
+    @Published var hasClip = false
 
     /// Sends a command to the board. Set by the view.
     var send: ((String) -> Void)?
@@ -26,7 +29,14 @@ final class VoiceCommand: ObservableObject {
     private var collecting = false
     /// RECORD sent, AUDIO_BEGIN not yet received.
     private var awaitingClip = false
+    /// Speech recognition running on the last clip.
+    private var recognizing = false
+    /// When the current click started. A clip takes about 8 s end to end, so after 15 s
+    /// we assume it was lost (board restarted, Bluetooth dropped) and accept clicks again.
+    private var busySince = Date.distantPast
     private var epoch: UInt32 = 0
+    private var lastClip = Data()
+    private var player: AVAudioPlayer?
 
     init() {
         SFSpeechRecognizer.requestAuthorization { _ in }
@@ -34,6 +44,11 @@ final class VoiceCommand: ObservableObject {
 
     /// Asks the board for a clip. Same as clicking the encoder.
     func listen() {
+        // One click at a time: ignore extra clicks while a clip is on its way or being recognised.
+        let busy = awaitingClip || collecting || recognizing
+        if busy && Date().timeIntervalSince(busySince) < 15 { return }
+        reset()
+        busySince = Date()
         awaitingClip = true
         send?("RECORD")
     }
@@ -51,12 +66,19 @@ final class VoiceCommand: ObservableObject {
             collecting = false
             // AUDIO_END:<epoch>:<bytes>
             let parts = line.split(separator: ":")
-            guard parts.count == 3, Int(parts[2]) == audio.count else {
-                status = "Some audio was lost over Bluetooth. Click the encoder to try again."
+            let expected = parts.count == 3 ? Int(parts[2]) ?? 0 : 0
+            keepClip(audio, expected: expected)
+            // Bluetooth can drop a few packets. A few missing milliseconds don't matter for speech,
+            // so recognise anything at least 95% complete.
+            guard expected > 0, audio.count * 100 >= expected * 95 else {
+                status = "Too much audio was lost over Bluetooth. Click the encoder to try again."
                 return
             }
+            if audio.count % 2 == 1 { audio.removeLast() }
             recognize(audio)
         } else if line.hasPrefix("ERROR:"), awaitingClip || collecting {
+            // "Microphone busy" just means an extra click; the clip in progress is still fine.
+            if line.contains("busy") && collecting { return }
             awaitingClip = false
             collecting = false
             status = String(line.dropFirst(6))
@@ -64,6 +86,36 @@ final class VoiceCommand: ObservableObject {
             // Intelligent disobedience: the board would not move forward.
             say("I can't go forward. The path ahead isn't clear.")
         }
+    }
+
+    /// Plays the last clip through the phone speaker, to hear what the handle microphone captured.
+    func playLastClip() {
+        guard !lastClip.isEmpty else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        player = try? AVAudioPlayer(data: Self.wav(from: lastClip))
+        player?.play()
+    }
+
+    private func keepClip(_ pcm: Data, expected: Int) {
+        lastClip = pcm
+        hasClip = !pcm.isEmpty
+        var peak: Int32 = 0
+        pcm.withUnsafeBytes { raw in
+            for sample in raw.bindMemory(to: Int16.self) { peak = max(peak, abs(Int32(Int16(littleEndian: sample)))) }
+        }
+        let seconds = Double(pcm.count) / 32000
+        clipInfo = String(format: "Last clip: %.1f s, %d of %d bytes, peak level %.0f%%",
+                          seconds, pcm.count, expected, Double(peak) / 327.68)
+    }
+
+    /// Forget any clip in progress, e.g. after Bluetooth reconnects.
+    func reset() {
+        awaitingClip = false
+        collecting = false
+        recognizing = false
+        task?.cancel()
+        task = nil
+        audio = Data()
     }
 
     func append(audio chunk: Data) {
@@ -85,6 +137,7 @@ final class VoiceCommand: ObservableObject {
         }
         guard let buffer = Self.floatBuffer(from: pcm) else { return }
         status = "Recognising…"
+        recognizing = true
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = false
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
@@ -94,11 +147,12 @@ final class VoiceCommand: ObservableObject {
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self else { return }
+                if result?.isFinal == true || error != nil { self.recognizing = false }
                 if let result, result.isFinal {
                     self.interpret(result.bestTranscription.formattedString, epoch: clipEpoch)
-                } else if error != nil {
+                } else if let error {
                     self.heard = ""
-                    self.status = "Didn't catch that. Click the encoder to try again."
+                    self.status = "Didn't catch that (\(error.localizedDescription)). Click the encoder to try again."
                 }
             }
         }
@@ -146,6 +200,17 @@ final class VoiceCommand: ObservableObject {
               let range = Range(match.range(at: 1), in: text) else { return nil }
         let place = text[range].trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
         return place.isEmpty ? nil : place
+    }
+
+    /// 16-bit mono PCM at 16 kHz -> WAV file bytes.
+    private static func wav(from pcm: Data) -> Data {
+        var header = Data()
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { header.append(contentsOf: $0) } }
+        header.append(contentsOf: Array("RIFF".utf8)); append(UInt32(36 + pcm.count))
+        header.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(16000)); append(UInt32(32000)); append(UInt16(2)); append(UInt16(16))
+        header.append(contentsOf: Array("data".utf8)); append(UInt32(pcm.count))
+        return header + pcm
     }
 
     /// 16-bit little-endian mono PCM at 16 kHz -> Float32 buffer for the recogniser.
