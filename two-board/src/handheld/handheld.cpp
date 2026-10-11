@@ -39,6 +39,12 @@ unsigned long rampStarted = 0;
 String commandLine;
 bool calibrating = false;
 unsigned long calibrationStarted = 0, calibrationDuration = 0;
+// Obstacle stops slow the rover down over this time (with three warning beeps) instead of cutting power.
+// Every other stop (button, voice, heartbeat, camera off) is still immediate.
+const unsigned long OBSTACLE_DECEL_MS = 900;
+bool decelerating = false;
+unsigned long decelStarted = 0;
+int decelFromSpeed = 0;
 
 void reportStatus() {
   const char *names[] = {"stop", "forward", "reverse", "left", "right"};
@@ -58,6 +64,7 @@ void stopRover(const char *reason) {
     calibrating = false;
   }
   ramping = false;
+  decelerating = false;
   direction = STOPPED; ++epoch;
   cancelPattern();
   digitalWrite(P2_IO2, HIGH);
@@ -65,6 +72,13 @@ void stopRover(const char *reason) {
   tone(P3_IO1, 600, 120);
   reportf("STOP:%s", reason);
   reportStatus();
+}
+void obstacleStop() {
+  if (decelerating) return;
+  ramping = false;
+  decelerating = true; decelStarted = millis(); decelFromSpeed = speedValue;
+  playObstacleAlert();
+  report("STOP:Camera obstacle, slowing down");
 }
 void onButtonPress() {
   if (!hostAlive || millis() - lastHost > 1200 || digitalRead(P2_IO1) == LOW) {
@@ -91,7 +105,7 @@ void processCommand(const String &line, bool fromBle = false) {
     cameraReady = true;
     cameraBlocked = line == "CAM:BLOCK";
     lastCameraFrame = millis();
-    if (REQUIRE_CAMERA && cameraBlocked && direction == FORWARD) stopRover("Camera obstacle");
+    if (REQUIRE_CAMERA && cameraBlocked && direction == FORWARD) obstacleStop();
     return;
   }
   if (line == "CAM:OFF") {
@@ -152,6 +166,7 @@ void processCommand(const String &line, bool fromBle = false) {
   else if (word == "left") direction = LEFT;
   else if (word == "right") direction = RIGHT;
   else { report("ERROR:Unknown voice command"); return; }
+  decelerating = false;
   speedValue = 80;
   rampStarted = millis();
   ramping = true;
@@ -175,6 +190,7 @@ void setup() {
 void loop() {
   encoder.tick();
   long position = encoder.getPosition();
+  if (position != lastPosition && decelerating) lastPosition = position;  // ignore the dial while stopping
   if (position != lastPosition) {
     if (calibrating) stopRover("Encoder adjusted during calibration");
     ramping = false;
@@ -206,6 +222,11 @@ void loop() {
     unsigned long elapsed = millis() - rampStarted;
     if (elapsed >= 4000) { speedValue = 160; ramping = false; }
     else speedValue = 80 + (elapsed * 80UL) / 4000UL;
+  }
+  if (decelerating) {
+    unsigned long elapsed = millis() - decelStarted;
+    if (elapsed >= OBSTACLE_DECEL_MS) stopRover("Camera obstacle");
+    else speedValue = decelFromSpeed - (int)((unsigned long)decelFromSpeed * elapsed / OBSTACLE_DECEL_MS);
   }
   if (now-lastHeartbeat >= 100) { lastHeartbeat=now; drivePacket(); }
   if (now-lastStatus >= 500) { lastStatus=now; reportStatus(); }
