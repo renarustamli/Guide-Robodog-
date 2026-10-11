@@ -74,7 +74,7 @@ struct ContentView: View {
                             .accessibilityHidden(true)
                         Text(cameraStatus).font(.title3.bold())
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Stop distance")
+                            Text("Obstacle distance")
                             HStack {
                                 Text("Near").font(.footnote)
                                 // Right = react further away = objects whose bottom edge sits higher already count.
@@ -83,7 +83,7 @@ struct ContentView: View {
                             }
                         }
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Stop distance")
+                        .accessibilityLabel("Obstacle distance")
                         ForEach(detector.objects, id: \.self) { Text($0) }
                         if let error = detector.error {
                             Text(error).foregroundStyle(.red)
@@ -176,10 +176,9 @@ struct ContentView: View {
     private var cameraStatus: String {
         if !detector.isRunning { return "Camera off" }
         switch detector.verdict {
+        // Any close obstacle starts the detour around it to the right; nothing here stops the rover.
         case .clear: return "No obstacle recognized in the centre"
-        case .avoidLeft: return "Obstacle ahead: left side is free"
-        case .avoidRight: return "Obstacle ahead: right side is free"
-        case .blocked: return "Obstacle ahead, no free side: STOP"
+        case .avoidLeft, .avoidRight, .blocked: return "Obstacle ahead: going around"
         }
     }
 

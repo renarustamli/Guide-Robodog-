@@ -110,9 +110,6 @@ final class VoiceCommand: ObservableObject {
             say("Rejoining the path.")
         } else if line == "AVOID:Done" {
             say("Back on the path.")
-        } else if line == "STOP:No way around the obstacle" || line == "STOP:Could not find a way around"
-                    || line == "STOP:Obstacle while going around" {
-            say("Obstacle ahead and no way around. I've stopped.")
         } else if line.hasPrefix("REFUSED:") {
             // Intelligent disobedience: the board would not move forward.
             finishDrive()
