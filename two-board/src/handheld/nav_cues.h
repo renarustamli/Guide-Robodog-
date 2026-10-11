@@ -9,6 +9,7 @@ static const Beep NAV_LEFT[] = {{1500, 150, 120}, {1500, 150, 0}};
 static const Beep NAV_RIGHT[] = {{1500, 600, 0}};
 static const Beep NAV_STRAIGHT[] = {{1000, 100, 0}};
 static const Beep NAV_ARRIVED[] = {{1000, 150, 50}, {1300, 150, 50}, {1600, 300, 0}};
+static const Beep OBSTACLE_ALERT[] = {{2000, 120, 100}, {2000, 120, 100}, {2000, 120, 0}};  // three beeps, about 0.66 s
 #define PATTERN(p) p, sizeof(p) / sizeof(p[0])
 
 static uint8_t navBuzzerPin = 0;
@@ -49,6 +50,9 @@ static void servicePattern() {
     startStep();
   }
 }
+
+/// Three beeps to warn the user the rover is stopping for an obstacle.
+static void playObstacleAlert() { playPattern(PATTERN(OBSTACLE_ALERT)); }
 
 /// Plays the cue named by NAV:<cue>. Returns false for an unknown cue.
 static bool playNavCue(const String &cue) {

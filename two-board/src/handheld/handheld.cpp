@@ -47,7 +47,10 @@ enum AvoidPhase { AVOID_NONE, TURN_OUT, PASS, TURN_BACK, RETURN_TO_LINE, ALIGN }
 const unsigned long AVOID_EXTRA_MS = 300;   // keep turning this long after the centre clears
 const unsigned long AVOID_MAX_MS = 4000;    // about half a turn; give up and stop after this
 const unsigned long AVOID_PASS_MS = 1500;   // each forward leg of the detour
-const int AVOID_SPEED = 170;                // fixed speed for the whole detour, so turns mirror
+const int AVOID_SPEED = 170;                // forward legs of the detour
+// Turning on the spot makes the wheels skid sideways, which needs much more power than driving
+// forward: below full power the motors strain and the rover turns too little. All turns use this.
+const int TURN_SPEED = 255;
 AvoidPhase avoidPhase = AVOID_NONE;
 Direction avoidSide = LEFT;
 unsigned long phaseStarted = 0, avoidClearSince = 0, turnOutMs = 0;
@@ -64,6 +67,13 @@ unsigned long rampStarted = 0;
 String commandLine;
 bool calibrating = false;
 unsigned long calibrationStarted = 0, calibrationDuration = 0;
+// Obstacle stops slow the rover down over this time (with three warning beeps) instead of cutting power.
+// Every other stop (button, voice, heartbeat, camera off) is still immediate.
+const unsigned long OBSTACLE_DECEL_MS = 900;
+bool decelerating = false;
+unsigned long decelStarted = 0;
+int decelFromSpeed = 0;
+const char *decelReason = "Camera obstacle";
 
 void reportStatus() {
   const char *names[] = {"stop", "forward", "reverse", "left", "right"};
@@ -85,6 +95,7 @@ void stopRover(const char *reason) {
   ramping = false;
   avoiding = false;
   avoidPhase = AVOID_NONE;
+  decelerating = false;
   speedValue = topSpeed;
   direction = STOPPED; ++epoch;
   cancelPattern();
@@ -93,6 +104,16 @@ void stopRover(const char *reason) {
   tone(P3_IO1, 600, 120);
   reportf("STOP:%s", reason);
   reportStatus();
+}
+void obstacleStop(const char *reason) {
+  if (decelerating) return;
+  decelReason = reason;
+  avoidPhase = AVOID_NONE;  // an obstacle ends any detour in progress
+  avoiding = false;
+  ramping = false;
+  decelerating = true; decelStarted = millis(); decelFromSpeed = speedValue;
+  playObstacleAlert();
+  report("STOP:Camera obstacle, slowing down");
 }
 void onButtonPress() {
   if (!hostAlive || millis() - lastHost > 1200 || digitalRead(P2_IO1) == LOW) {
@@ -117,7 +138,7 @@ void enterPhase(AvoidPhase phase, Direction move) {
   phaseStarted = millis();
   direction = move;
   ramping = false;
-  speedValue = min(AVOID_SPEED, topSpeed);
+  speedValue = move == FORWARD ? min(AVOID_SPEED, topSpeed) : TURN_SPEED;
   drivePacket();
   reportStatus();
 }
@@ -155,18 +176,20 @@ void processCommand(const String &line, bool fromBle = false) {
     cameraBlocked = line != "CAM:CLEAR";
     lastCameraFrame = millis();
     bool clear = line == "CAM:CLEAR";
-    if (avoidPhase == TURN_OUT) {
+    if (decelerating) {
+      // Already slowing down for an obstacle: nothing to decide until it has stopped.
+    } else if (avoidPhase == TURN_OUT) {
       // Turning away: wait for a clear centre. Both sides blocked means there's no way around.
       if (clear) { if (!avoidClearSince) avoidClearSince = millis(); }
       else if (line == "CAM:BLOCK") { if (REQUIRE_CAMERA) stopRover("No way around the obstacle"); }
       else avoidClearSince = 0;
     } else if (avoidPhase == PASS || avoidPhase == RETURN_TO_LINE) {
-      // Driving a detour leg: anything ahead now is a second obstacle, so stop.
-      if (!clear && REQUIRE_CAMERA) stopRover("Obstacle while going around");
+      // Driving a detour leg: anything ahead now is a second obstacle, so slow down and stop.
+      if (!clear && REQUIRE_CAMERA) obstacleStop("Obstacle while going around");
     } else if (avoidPhase == TURN_BACK || avoidPhase == ALIGN) {
       // Turning back toward the line sweeps the camera across the obstacle we are passing: ignore.
     } else if (direction == FORWARD && !clear) {
-      if (line == "CAM:BLOCK") { if (REQUIRE_CAMERA) stopRover("Camera obstacle"); }
+      if (line == "CAM:BLOCK") { if (REQUIRE_CAMERA) obstacleStop("Camera obstacle"); }
       else startAvoid(line == "CAM:AVOID:LEFT" ? LEFT : RIGHT);
     }
     return;
@@ -197,6 +220,8 @@ void processCommand(const String &line, bool fromBle = false) {
         (move != "forward" && move != "right" && move != "left")) {
       report("ERROR:Invalid calibration (100 to 10000 ms, forward/left/right)"); return;
     }
+    // Turns run 50% longer than requested (capped at the 10 s limit); forward runs are unchanged.
+    if (move != "forward") duration = min(duration * 3 / 2, 10000L);
     ++epoch;
     direction = move == "forward" ? FORWARD : (move == "right" ? RIGHT : LEFT);
     speedValue = 80; rampFrom = 80; rampTo = 160; rampDuration = 4000;
@@ -230,7 +255,13 @@ void processCommand(const String &line, bool fromBle = false) {
   else if (word == "left") direction = LEFT;
   else if (word == "right") direction = RIGHT;
   else { report("ERROR:Unknown voice command"); return; }
-  startRamp();
+  decelerating = false;
+  if (direction == LEFT || direction == RIGHT) {
+    ramping = false;
+    speedValue = TURN_SPEED;  // turns start at full power, no ramp
+  } else {
+    startRamp();
+  }
   digitalWrite(P2_IO2, LOW);
   tone(P3_IO1, 1400, 80);
   drivePacket(); reportStatus();
@@ -251,6 +282,7 @@ void setup() {
 void loop() {
   encoder.tick();
   long position = encoder.getPosition();
+  if (position != lastPosition && decelerating) lastPosition = position;  // ignore the dial while stopping
   if (position != lastPosition) {
     if (calibrating) stopRover("Encoder adjusted during calibration");
     ramping = false;
@@ -319,6 +351,11 @@ void loop() {
     unsigned long elapsed = millis() - rampStarted;
     if (elapsed >= rampDuration) { speedValue = rampTo; ramping = false; }
     else speedValue = rampFrom + (long)(elapsed * (rampTo - rampFrom)) / (long)rampDuration;
+  }
+  if (decelerating) {
+    unsigned long elapsed = millis() - decelStarted;
+    if (elapsed >= OBSTACLE_DECEL_MS) stopRover(decelReason);
+    else speedValue = decelFromSpeed - (int)((unsigned long)decelFromSpeed * elapsed / OBSTACLE_DECEL_MS);
   }
   if (now-lastHeartbeat >= 100) { lastHeartbeat=now; drivePacket(); }
   if (now-lastStatus >= 500) { lastStatus=now; reportStatus(); }

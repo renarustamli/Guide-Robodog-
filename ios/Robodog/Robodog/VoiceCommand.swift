@@ -23,6 +23,11 @@ final class VoiceCommand: ObservableObject {
     var startRoute: ((String) -> Void)?
     /// Starts a scripted drive route if the place is one of the dummy destinations. Returns false if not.
     var startDummyRoute: ((String) -> Bool)?
+    /// A found Apple Maps route is waiting for the user to say yes or no.
+    var routePending: (() -> Bool)?
+    var confirmRoute: (() -> Void)?
+    /// Drops a found route that is waiting for yes or no.
+    var cancelPendingRoute: (() -> Void)?
     /// Abandons a scripted drive route. Called on a spoken stop.
     var cancelRoute: (() -> Void)?
 
@@ -199,9 +204,21 @@ final class VoiceCommand: ObservableObject {
         // Stop wins over everything, whatever else was said.
         if Self.has(words, "stop|halt|wait") {
             cancelRoute?()
+            cancelPendingRoute?()
             send?("VOICE:\(epoch):stop")
             say("Stopping.")
             return
+        }
+        // A found route is waiting for yes or no; anything else falls through to the normal commands.
+        if routePending?() == true {
+            if Self.has(words, "yes|yeah|yep|okay|ok|sure|confirm|go ahead") {
+                confirmRoute?()
+                return
+            }
+            if Self.has(words, "no|nope|cancel|never mind") {
+                cancelPendingRoute?()
+                return
+            }
         }
         if let place = Self.destination(in: words) {
             if startDummyRoute?(place) == true { return }

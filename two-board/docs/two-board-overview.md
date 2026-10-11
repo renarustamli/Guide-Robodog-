@@ -44,7 +44,7 @@ The receiver obeys only the handheld's MAC address, and stops its motors if no c
 |---|---|---|
 | Host → handheld | `PING` | Heartbeat; the handheld stops if it is silent for 1.2 s |
 | Host → handheld | `RECORD` / `VOICE:<epoch>:<word>` / `STOP` | Request a clip, run a recognised word, stop |
-| Host → handheld | `CAL:<move>:<ms>` | Calibration run |
+| Host → handheld | `CAL:<move>:<ms>` | Calibration run (`left`/`right` run 1.5× the requested ms, capped at 10000) |
 | Host → handheld | `CAM:CLEAR` / `CAM:BLOCK` / `CAM:OFF` | Camera frames; forward needs a clear one in the last 2 s |
 | Host → handheld | `CAM:AVOID:LEFT` / `CAM:AVOID:RIGHT` | Centre blocked, that side free: go around that way while driving forward |
 | Host → handheld | `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` / `NAV:ARRIVED` | Buzzer turn cue, only while moving |
