@@ -20,6 +20,8 @@ final class RouteGuide: NSObject, ObservableObject {
     @Published var isGuiding = false
     /// Called on the main thread with LEFT, RIGHT, STRAIGHT or ARRIVED.
     var onCue: ((String) -> Void)?
+    /// Called on the main thread with a sentence worth speaking (route found, not found, arrived).
+    var onAnnounce: ((String) -> Void)?
 
     private let location = CLLocationManager()
     private var steps: [MKRoute.Step] = []
@@ -47,6 +49,7 @@ final class RouteGuide: NSObject, ObservableObject {
             guard current == self.generation else { return }
             guard let place = response?.mapItems.first else {
                 self.instruction = "Couldn't find \(query)."
+                self.onAnnounce?(self.instruction)
                 return
             }
             let request = MKDirections.Request()
@@ -57,6 +60,7 @@ final class RouteGuide: NSObject, ObservableObject {
                 guard current == self.generation else { return }
                 guard let route = response?.routes.first else {
                     self.instruction = "No walking route to \(place.name ?? query)."
+                    self.onAnnounce?(self.instruction)
                     return
                 }
                 self.begin(route, name: place.name ?? query)
@@ -86,6 +90,7 @@ final class RouteGuide: NSObject, ObservableObject {
         destination = CLLocation(points[route.polyline.pointCount - 1].coordinate)
         isGuiding = true
         instruction = "Route to \(name): \(Int(route.distance)) m."
+        onAnnounce?("Route to \(name) ready, \(Int(route.distance)) metres. Say forward to start.")
         onCue?("STRAIGHT")
         location.startUpdatingLocation()
     }
@@ -132,6 +137,7 @@ extension RouteGuide: CLLocationManagerDelegate {
             onCue?("ARRIVED")
             stop()
             instruction = "You have arrived."
+            onAnnounce?(instruction)
             return
         }
 

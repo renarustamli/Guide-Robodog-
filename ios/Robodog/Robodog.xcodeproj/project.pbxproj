@@ -247,6 +247,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connects to the Robodog board.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Detects obstacles in front of the robot.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Gives walking directions.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Understands voice commands from the handle microphone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -282,6 +283,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connects to the Robodog board.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Detects obstacles in front of the robot.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Gives walking directions.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Understands voice commands from the handle microphone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

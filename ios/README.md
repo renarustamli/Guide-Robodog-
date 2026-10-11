@@ -1,35 +1,29 @@
 # Robodog iPhone App
 
-The iPhone rides on the chassis, facing forward. It replaces the Mac + USB setup:
+The iPhone rides on the chassis, facing forward. It is the **host** of the handheld controller board (see [`two-board/`](../two-board/README.md)), over Bluetooth:
 
-- **Camera**: rear camera + Apple Vision object detection sends `CAM:CLEAR` / `CAM:BLOCK` about 5 times a second.
-- **Navigation**: Apple Maps walking route (free, no API key). Sends `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` about 15 m before each turn, then `NAV:ARRIVED`.
-- **Link**: Bluetooth to the Genesis Mini, which advertises as `Robodog`. Same messages as the USB Camera Test.
+- **Heartbeat**: sends `PING` every 0.4 s. The handheld stops after 1.2 s without one.
+- **Camera**: rear camera + Apple Vision object detection sends `CAM:CLEAR` / `CAM:BLOCK` about 5 times a second. The handheld refuses to go forward unless the path is clear (intelligent disobedience).
+- **Voice**: click the encoder on the handle and speak for 3 s. The handle microphone's audio comes to the phone over Bluetooth, Apple speech recognition (on the phone, no key) turns it into a command, and the app sends it back. Replies are spoken through the phone speaker (can be switched off).
+- **Navigation**: "guide me to Tesco" (or type it) finds an Apple Maps walking route (free, no key). Sends `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` about 15 m before each turn, then `NAV:ARRIVED`; the handle buzzes.
 
-Safety is unchanged: if the app closes, the screen locks or Bluetooth drops, camera messages stop and the board stops and beeps after 2 s.
+Safety: if the app closes, the screen locks or Bluetooth drops, the heartbeat stops and the rover stops within 1.2 s. The LED stop button always works.
 
-## 1. Test the Bluetooth firmware first
+## 1. Flash the boards
 
-1. Put the new firmware on the Genesis Mini with Axiometa Studio:
-   1. Connect the board to the Mac by USB and open the project in Studio.
-   2. Paste the contents of [`firmware/sketch.ino`](../firmware/sketch.ino) over Studio's `firmware/sketch.ino`.
-   3. Create `firmware/ble.h` in Studio (or ask Axie to) and paste in [`firmware/ble.h`](../firmware/ble.h).
-   4. Press Upload. The serial monitor should print `Navigation cues: left = two short, ...`.
-2. On the iPhone, install **nRF Connect** from the App Store, scan, and connect to **Robodog**.
-3. Open the **Nordic UART Service**. On the TX characteristic (`6E400003…`), tap the triple-arrow to subscribe; status lines from the board appear here.
-4. On the RX characteristic (`6E400002…`), tap the up-arrow and send these as **Text**, quickly (the board stops 2 s after the last camera message, as if the camera were lost):
-   1. Send `CAM:CLEAR`, then press the encoder. The board reports `Running`.
-   2. Send `NAV:LEFT`. The handle gives two short buzzes.
-5. Wait 2 s: the board stops on its own and beeps. That's the safety timeout working.
+The firmware is a PlatformIO project in [`two-board/`](../two-board/).
 
-If this works, the wireless link is done.
+1. In VS Code, install the **PlatformIO IDE** extension, then **File → Open Folder → `two-board`**.
+2. Plug in the **handheld** board (encoder, stop button, buzzer, mic). In the PlatformIO status bar choose env **`handheld`** and click **Upload** (→). Command line: `pio run -e handheld -t upload`.
+3. Plug in the **receiver** board (motors) and do the same with env **`receiver`**.
+4. Quick Bluetooth check (optional): in the free **nRF Connect** iPhone app, connect to **Robodog**, open the Nordic UART Service and turn on notifications on the `6E400003…` characteristic. `STATE:...` lines should arrive twice a second.
 
 ## 2. Open the Xcode project
 
 Open [`ios/Robodog/Robodog.xcodeproj`](Robodog/Robodog.xcodeproj) in Xcode. The project is already set up:
 
 - The Swift code lives in [`ios/Robodog/Robodog/`](Robodog/Robodog/). Xcode picks up any file in that folder automatically.
-- Camera, Bluetooth and location permission messages are set.
+- Camera, Bluetooth, location and speech recognition permission messages are set.
 - Portrait only, iOS 17 or newer, `Default Actor Isolation` = nonisolated.
 
 ## 3. Add the object-detection model
@@ -54,12 +48,15 @@ With a free Apple ID the app expires after 7 days. Press ▶ again to reinstall.
 
 ## Using it
 
-1. Open the app. It connects to Robodog by itself.
-2. **Start camera**. Point it at a clear path, then press the encoder on the handle to start.
-3. Navigation:
-   - **Demo route**: plays left/right/arrived cues on a timer, for indoor demos.
-   - **Start route**: type a place (e.g. `Tesco`) and walk; cues play as you near each turn.
-4. The LED button still stops everything.
+Test with the wheels off the ground first, then with a sighted helper holding the stop button.
+
+1. Open the app. It connects to Robodog by itself and shows the handle's state (stopped/moving, speed).
+2. **Start camera** and point it at a clear path.
+3. Click the encoder (or tap **Talk**), wait for "Listening", and say a command:
+   - **"Forward"**, **"left"**, **"right"**, **"back"**, **"stop"**
+   - **"Guide me to Tesco"** (also "take me to…", "navigate to…"), then **"forward"** to start walking.
+4. While moving, turn cues buzz the handle. **Demo route** plays them on a timer for indoor demos (the rover must be moving, or cues are ignored).
+5. The LED button stops everything. Turning the encoder changes speed.
 
 ## Files
 
@@ -67,7 +64,8 @@ All in `ios/Robodog/Robodog/`.
 
 | File | What it does |
 |---|---|
-| `BLEManager.swift` | Finds and connects to Robodog, sends commands, shows board status |
+| `BLEManager.swift` | Finds and connects to Robodog, heartbeat, sends commands, reads status and audio |
+| `VoiceCommand.swift` | Asks for clips, speech recognition, turns words into drive commands or routes, spoken replies |
 | `ObstacleDetector.swift` | Rear camera, Vision detection, centre-zone BLOCK rule, camera preview |
 | `RouteGuide.swift` | Apple Maps search + walking route, GPS tracking, turn cues, demo route |
 | `ContentView.swift` | The screen |

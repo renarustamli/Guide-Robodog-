@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var ble = BLEManager()
     @StateObject private var detector = ObstacleDetector()
     @StateObject private var guide = RouteGuide()
+    @StateObject private var voice = VoiceCommand()
     @State private var destination = ""
 
     var body: some View {
@@ -13,10 +14,26 @@ struct ContentView: View {
 
                 Label(ble.state, systemImage: ble.isConnected ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
                     .font(.headline)
+                if let handheld = ble.handheld {
+                    Text(handheldSummary(handheld)).font(.title3.bold())
+                }
                 Text(ble.boardStatus)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Board: \(ble.boardStatus)")
+
+                GroupBox("Voice") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(voice.status)
+                        if !voice.heard.isEmpty { Text("You: \(voice.heard)").font(.headline) }
+                        if !voice.reply.isEmpty { Text("Robodog: \(voice.reply)") }
+                        Button("Talk", action: voice.listen)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(!ble.isConnected)
+                        Toggle("Spoken replies", isOn: $voice.spokenReplies)
+                    }
+                }
 
                 GroupBox("Obstacle camera") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -66,7 +83,20 @@ struct ContentView: View {
         .onAppear {
             detector.onFrame = { blocked in ble.send(blocked ? "CAM:BLOCK" : "CAM:CLEAR") }
             guide.onCue = { cue in ble.send("NAV:" + cue) }
+            guide.onAnnounce = { text in voice.say(text) }
+            ble.onLine = { line in voice.handle(line: line) }
+            ble.onAudio = { chunk in voice.append(audio: chunk) }
+            voice.send = { command in ble.send(command) }
+            voice.startRoute = { place in
+                destination = place
+                guide.start(to: place)
+            }
         }
+    }
+
+    private func handheldSummary(_ state: BLEManager.HandheldState) -> String {
+        let motion = state.direction == "stop" ? "Stopped" : "Moving \(state.direction)"
+        return "\(motion) · speed \(state.speed)" + (state.stopHeld ? " · stop button held" : "")
     }
 
     private var cameraStatus: String {

@@ -43,6 +43,17 @@ The rover follows the same principle:
 - It signals the refusal through the handle's buzzer/haptics so the user knows why it stopped.
 - It also keeps the user on a straight line so they don't drift or trip.
 
+## Where the code is
+
+| Part | Folder | Status |
+|---|---|---|
+| Handheld + receiver firmware (two boards, ESP-NOW, motors) | [`two-board/`](../two-board/README.md) | **Main firmware** |
+| iPhone app (host: camera, voice, navigation) | [`ios/`](../ios/README.md) | Main app |
+| Single-board Studio test (Bluetooth, camera interlock, cues, no motors) | [`firmware/`](../firmware/) | Earlier test, kept for Axiometa Studio |
+| Browser camera test over USB | [`browser/`](../browser/) | Earlier test |
+
+The sections below describe the earlier single-board test. For the two-board setup see [`two-board/docs/two-board-overview.md`](../two-board/docs/two-board-overview.md).
+
 ## Current Board Setup (Genesis Mini)
 
 Defined in [`axiometa.json`](../axiometa.json). All four modules sit on the handle side for now.
