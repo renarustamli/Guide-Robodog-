@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var detector = ObstacleDetector()
     @StateObject private var guide = RouteGuide()
     @StateObject private var voice = VoiceCommand()
+    @StateObject private var driver = RouteExecutor()
     @State private var destination = ""
 
     var body: some View {
@@ -36,6 +37,20 @@ struct ContentView: View {
                             Text(voice.clipInfo).font(.footnote).foregroundStyle(.secondary)
                             Button("Play last recording", action: voice.playLastClip)
                                 .buttonStyle(.bordered)
+                        }
+                    }
+                }
+
+                GroupBox("Voice route (dummy)") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Say \"I want to go to the supermarket\": 2 m forward, turn right, 1 m forward.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text(driver.status).font(.title3)
+                        if driver.isRunning {
+                            Button("Stop route", role: .destructive) { driver.cancel() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
                         }
                     }
                 }
@@ -89,10 +104,25 @@ struct ContentView: View {
             detector.onFrame = { blocked in ble.send(blocked ? "CAM:BLOCK" : "CAM:CLEAR") }
             guide.onCue = { cue in ble.send("NAV:" + cue) }
             guide.onAnnounce = { text in voice.say(text) }
-            ble.onLine = { line in voice.handle(line: line) }
+            ble.onLine = { line in
+                voice.handle(line: line)
+                driver.handle(line: line)
+            }
             ble.onAudio = { chunk in voice.append(audio: chunk) }
-            ble.onConnectionChange = { _ in voice.reset() }
+            ble.onConnectionChange = { connected in
+                voice.reset()
+                if !connected { driver.cancel(announce: "Connection lost. Route cancelled.", sendStop: false) }
+            }
+            driver.send = { command in ble.send(command) }
+            driver.say = { text in voice.say(text) }
             voice.send = { command in ble.send(command) }
+            voice.cancelRoute = { driver.cancel(announce: nil) }
+            voice.startDummyRoute = { place in
+                guard let route = RouteExecutor.route(for: place) else { return false }
+                destination = place
+                driver.start(route)
+                return true
+            }
             voice.startRoute = { place in
                 destination = place
                 guide.start(to: place)
