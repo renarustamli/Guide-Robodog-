@@ -21,6 +21,10 @@ final class VoiceCommand: ObservableObject {
     var send: ((String) -> Void)?
     /// Starts a walking route to a place name. Set by the view.
     var startRoute: ((String) -> Void)?
+    /// Starts a scripted drive route if the place is one of the dummy destinations. Returns false if not.
+    var startDummyRoute: ((String) -> Bool)?
+    /// Abandons a scripted drive route. Called on a spoken stop.
+    var cancelRoute: (() -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-GB"))
     private let synthesizer = AVSpeechSynthesizer()
@@ -185,11 +189,13 @@ final class VoiceCommand: ObservableObject {
 
         // Stop wins over everything, whatever else was said.
         if Self.has(words, "stop|halt|wait") {
+            cancelRoute?()
             send?("VOICE:\(epoch):stop")
             say("Stopping.")
             return
         }
         if let place = Self.destination(in: words) {
+            if startDummyRoute?(place) == true { return }
             startRoute?(place)
             say("Finding a route to \(place).")
             return
