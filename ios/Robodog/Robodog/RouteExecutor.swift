@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 /// Drives the rover along a short scripted route (dummy data for now, no GPS or maps).
-/// "I want to go to the supermarket" -> 2 m forward, turn right, 1 m forward.
+/// "I want to go to the supermarket" -> 5 m forward, turn right, turn left, 3 m forward.
 ///
 /// Each leg is a drive word (VOICE:<epoch>:forward / left / right) held for a calculated time,
 /// then VOICE:<epoch>:stop. The epoch comes from the board's STATE lines; every stop bumps it,
@@ -52,7 +52,7 @@ final class RouteExecutor: ObservableObject {
     /// Dummy destinations. Keywords are matched as whole words in what the user said.
     static let dummyRoutes: [(keywords: [String], route: Route)] = [
         (["supermarket", "tesco", "shop", "store", "groceries"],
-         Route(name: "the supermarket", legs: [.forward(metres: 2), .right(degrees: 90), .forward(metres: 1)])),
+         Route(name: "the supermarket", legs: [.forward(metres: 5), .right(degrees: 90), .left(degrees: 90), .forward(metres: 3)])),
         (["museum", "gallery", "exhibition"],
          Route(name: "the museum", legs: [.forward(metres: 3), .left(degrees: 90), .forward(metres: 2)])),
     ]
