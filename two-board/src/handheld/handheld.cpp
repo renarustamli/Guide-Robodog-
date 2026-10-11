@@ -15,12 +15,14 @@
 #include "nav_cues.h"
 
 // Intelligent disobedience: refuse to drive forward unless a camera reported a clear path in the
-// last 2 s, and stop if it sees an obstacle or goes quiet. Build with -DREQUIRE_CAMERA=0 to bench-test
+// last 5 s, and stop if it sees an obstacle or goes quiet. Build with -DREQUIRE_CAMERA=0 to bench-test
 // without a camera.
 #ifndef REQUIRE_CAMERA
 #define REQUIRE_CAMERA 1
 #endif
-const unsigned long CAMERA_TIMEOUT_MS = 2000;
+// Forgiving on purpose: a slow frame or a Bluetooth hiccup must not stop the rover, only a camera
+// that is really gone (app closed, phone locked).
+const unsigned long CAMERA_TIMEOUT_MS = 5000;
 bool cameraReady = false, cameraBlocked = true;
 unsigned long lastCameraFrame = 0;
 
