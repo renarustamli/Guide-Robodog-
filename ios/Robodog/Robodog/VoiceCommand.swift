@@ -34,6 +34,9 @@ final class VoiceCommand: ObservableObject {
     /// When the current click started. A clip takes about 8 s end to end, so after 15 s
     /// we assume it was lost (board restarted, Bluetooth dropped) and accept clicks again.
     private var busySince = Date.distantPast
+    /// Drive word sent to the board, waiting for its STATE line to confirm, with the reply to speak then.
+    private var pendingDrive: (direction: String, reply: String)?
+    private var driveTimeout: DispatchWorkItem?
     private var epoch: UInt32 = 0
     private var lastClip = Data()
     private var player: AVAudioPlayer?
@@ -54,7 +57,17 @@ final class VoiceCommand: ObservableObject {
     }
 
     func handle(line: String) {
-        if line.hasPrefix("LISTEN:") {
+        if line.hasPrefix("STATE:"), let pending = pendingDrive {
+            // STATE:<epoch>,<speed>,<direction>,<stop held>
+            let fields = line.dropFirst(6).split(separator: ",")
+            if fields.count == 4, fields[2] == pending.direction {
+                finishDrive()
+                say(pending.reply)
+            }
+        } else if line.hasPrefix("ERROR:Stale"), pendingDrive != nil {
+            finishDrive()
+            say("The robot was stopped while I was listening. Please say it again.")
+        } else if line.hasPrefix("LISTEN:") {
             listen()
         } else if line.hasPrefix("AUDIO_BEGIN:") {
             epoch = UInt32(line.dropFirst(12)) ?? 0
@@ -84,6 +97,7 @@ final class VoiceCommand: ObservableObject {
             status = String(line.dropFirst(6))
         } else if line.hasPrefix("REFUSED:") {
             // Intelligent disobedience: the board would not move forward.
+            finishDrive()
             say("I can't go forward. The path ahead isn't clear.")
         }
     }
@@ -106,6 +120,12 @@ final class VoiceCommand: ObservableObject {
         let seconds = Double(pcm.count) / 32000
         clipInfo = String(format: "Last clip: %.1f s, %d of %d bytes, peak level %.0f%%",
                           seconds, pcm.count, expected, Double(peak) / 327.68)
+    }
+
+    private func finishDrive() {
+        driveTimeout?.cancel()
+        driveTimeout = nil
+        pendingDrive = nil
     }
 
     /// Forget any clip in progress, e.g. after Bluetooth reconnects.
@@ -181,8 +201,17 @@ final class VoiceCommand: ObservableObject {
             ("forward|forwards|go|walk|straight|ahead", "forward", "Going forward."),
         ]
         if let match = drive.first(where: { Self.has(words, $0.pattern) }) {
+            // Reply only once the board confirms the move (or refuses it), not just because we heard the word.
+            finishDrive()
+            pendingDrive = (match.word, match.reply)
+            let timeout = DispatchWorkItem { [weak self] in
+                guard let self, self.pendingDrive != nil else { return }
+                self.pendingDrive = nil
+                self.say("The robot didn't respond.")
+            }
+            driveTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: timeout)
             send?("VOICE:\(epoch):\(match.word)")
-            say(match.reply)
             return
         }
         say("Sorry, I didn't understand. Say forward, left, right, stop, or guide me to a place.")
