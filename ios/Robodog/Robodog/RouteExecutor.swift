@@ -40,11 +40,10 @@ final class RouteExecutor: ObservableObject {
         let legs: [Leg]
     }
 
-    // CALIBRATE THESE on the real rover. They convert distance and angle into drive time.
-    // The board ramps speed from 80 to 160 over 4 s, so short legs travel less than at full speed:
-    // measure a 2 m run and a 90 degree turn, then adjust.
-    static let metresPerSecond = 0.25
-    static let degreesPerSecond = 45.0
+    // Drive times, measured on the rover: 2.5 s per metre forward, 0.01 s per degree of turn.
+    // Re-measure if the battery, floor or wheels change.
+    static let secondsPerMetre = 2.5
+    static let secondsPerDegree = 0.01
     /// Pause between legs.
     static let legPause: TimeInterval = 0.8
     /// Pause after announcing the route, so the user can step back.
@@ -150,8 +149,8 @@ final class RouteExecutor: ObservableObject {
 
     private static func duration(of leg: Leg) -> TimeInterval {
         switch leg {
-        case .forward(let metres): return metres / metresPerSecond
-        case .left(let degrees), .right(let degrees): return degrees / degreesPerSecond
+        case .forward(let metres): return metres * secondsPerMetre
+        case .left(let degrees), .right(let degrees): return degrees * secondsPerDegree
         }
     }
 
