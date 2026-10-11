@@ -109,6 +109,8 @@ void stopRover(const char *reason) {
   reportf("STOP:%s", reason);
   reportStatus();
 }
+// Not used in the demo (obstacles start a detour instead of stopping); call it in place of startAvoid()
+// to go back to slowing down and stopping for obstacles.
 void obstacleStop(const char *reason) {
   if (decelerating) return;
   decelReason = reason;
@@ -159,9 +161,6 @@ void finishAvoid() {
   report("AVOID:Done");
   reportStatus();
 }
-bool cameraClear() {
-  return !REQUIRE_CAMERA || (cameraReady && !cameraBlocked);
-}
 void refuse(const char *reason) {
   cancelPattern();
   tone(P3_IO1, 600, 300);
@@ -179,9 +178,7 @@ void processCommand(const String &line, bool fromBle = false) {
     if (decelerating) {
       // Already slowing down for an obstacle: nothing to decide until it has stopped.
     } else if (avoiding) {
-      // Forward legs of the detour: anything ahead now is a second obstacle, so slow down and stop.
-      // During the turns the camera sweeps across the obstacle being passed: ignore it.
-      if (DETOUR[detourStep].move == FORWARD && !clear && REQUIRE_CAMERA) obstacleStop("Obstacle while going around");
+      // Already going around: keep following the detour, whatever the camera sees (demo behaviour).
     } else if (direction == FORWARD && !clear) {
       startAvoid();
     }
@@ -240,7 +237,10 @@ void processCommand(const String &line, bool fromBle = false) {
   if (requestedEpoch != epoch || !hostAlive || digitalRead(P2_IO1) == LOW) {
     report("ERROR:Stale voice command or stop held"); return;
   }
-  if (word == "forward" && !cameraClear()) { refuse("Camera has not reported a clear path"); return; }
+  // Forward needs the camera running. An obstacle already in view doesn't refuse it: the rover starts
+  // and goes straight into the detour (demo behaviour: never stop for an obstacle, go around it).
+  if (word == "forward" && REQUIRE_CAMERA && !cameraReady) { refuse("Camera is off"); return; }
+  bool obstacleAhead = REQUIRE_CAMERA && cameraBlocked;
   avoiding = false;  // a spoken command takes over from going around
   detourStep = -1;
   if (word == "forward") direction = FORWARD;
@@ -258,6 +258,7 @@ void processCommand(const String &line, bool fromBle = false) {
   digitalWrite(P2_IO2, LOW);
   tone(P3_IO1, 1400, 80);
   drivePacket(); reportStatus();
+  if (direction == FORWARD && obstacleAhead) startAvoid();
 }
 void setup() {
   Serial.setRxBufferSize(2048);
