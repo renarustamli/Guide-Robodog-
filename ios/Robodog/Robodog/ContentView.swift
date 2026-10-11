@@ -77,10 +77,8 @@ struct ContentView: View {
                             Text("Stop distance")
                             HStack {
                                 Text("Near").font(.footnote)
-                                // Right = stop further away = a smaller object height already counts.
-                                Slider(value: Binding(get: { 0.75 - detector.nearHeight },
-                                                      set: { detector.nearHeight = 0.75 - $0 }),
-                                       in: 0.15...0.6)
+                                // Right = react further away = objects whose bottom edge sits higher already count.
+                                Slider(value: $detector.nearBottom, in: 0.02...0.4)
                                 Text("Far").font(.footnote)
                             }
                         }

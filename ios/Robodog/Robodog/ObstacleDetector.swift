@@ -27,16 +27,17 @@ final class ObstacleDetector: NSObject, ObservableObject {
 
     @Published var isRunning = false
     @Published var verdict = Verdict.clear
-    /// An object counts as an obstacle when it fills at least this fraction of the picture's height.
-    /// The camera can't measure distance, so closeness is judged by how big the object looks:
-    /// higher = only very close objects, lower = further objects too. Set from the slider on screen.
-    @Published var nearHeight: Double = ObstacleDetector.defaultNearHeight {
+    /// An object counts as an obstacle when its bottom edge (where it meets the floor) is in the lowest
+    /// `nearBottom` fraction of the picture. The camera sits low on the chassis, so a close object's bottom
+    /// edge is near the bottom of the picture (or below it) while a far one's sits near the middle, whatever
+    /// its height. Higher = objects further away count too. Set from the slider on screen.
+    @Published var nearBottom: Double = ObstacleDetector.defaultNearBottom {
         didSet {
-            let height = CGFloat(nearHeight)
-            queue.async { self.queueNearHeight = height }
+            let bottom = CGFloat(nearBottom)
+            queue.async { self.queueNearBottom = bottom }
         }
     }
-    static let defaultNearHeight = 0.33
+    static let defaultNearBottom = 0.12
     /// Detections less certain than this are ignored.
     static let minConfidence: Float = 0.5
     var blocked: Bool { verdict != .clear }
@@ -53,8 +54,8 @@ final class ObstacleDetector: NSObject, ObservableObject {
     private var lastFrame = Date.distantPast
     private var lastGood = Date.distantPast
     private var held: [VNRecognizedObjectObservation] = []
-    /// Copy of nearHeight, read on the camera queue only.
-    private var queueNearHeight = CGFloat(ObstacleDetector.defaultNearHeight)
+    /// Copy of nearBottom, read on the camera queue only.
+    private var queueNearBottom = CGFloat(ObstacleDetector.defaultNearBottom)
 
     // Middle 40% wide, 70% tall (Vision uses normalized coordinates).
     private let zone = CGRect(x: 0.3, y: 0.15, width: 0.4, height: 0.7)
@@ -159,10 +160,11 @@ extension ObstacleDetector: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Far-away (small-looking) objects are listed but don't count as obstacles.
-        let near = held.filter { $0.boundingBox.height >= queueNearHeight }
+        // Vision's y runs from 0 at the bottom of the picture to 1 at the top.
+        let near = held.filter { $0.boundingBox.minY <= queueNearBottom }
         let verdict = decide(near.map(\.boundingBox))
         let labels = held.map { observation in
-            let distance = observation.boundingBox.height >= queueNearHeight ? "near" : "far"
+            let distance = observation.boundingBox.minY <= queueNearBottom ? "near" : "far"
             return "\(observation.labels.first?.identifier ?? "object") · \(Int(observation.confidence * 100))% · \(distance)"
         }
         DispatchQueue.main.async {
