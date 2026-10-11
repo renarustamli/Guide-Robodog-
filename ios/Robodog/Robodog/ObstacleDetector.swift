@@ -27,16 +27,18 @@ final class ObstacleDetector: NSObject, ObservableObject {
 
     @Published var isRunning = false
     @Published var verdict = Verdict.clear
-    /// Relaxed (demo): only objects that look close count as obstacles. Strict: smaller, further objects count too.
-    /// The camera can't measure distance, so closeness is judged by how tall the object looks in the picture.
-    @Published var relaxed = true {
+    /// An object counts as an obstacle when it fills at least this fraction of the picture's height.
+    /// The camera can't measure distance, so closeness is judged by how big the object looks:
+    /// higher = only very close objects, lower = further objects too. Set from the slider on screen.
+    @Published var nearHeight: Double = ObstacleDetector.defaultNearHeight {
         didSet {
-            let height = relaxed ? Self.relaxedNearHeight : Self.strictNearHeight
-            queue.async { self.nearHeight = height }
+            let height = CGFloat(nearHeight)
+            queue.async { self.queueNearHeight = height }
         }
     }
-    static let relaxedNearHeight: CGFloat = 0.45  // about an arm's length for a chair or person
-    static let strictNearHeight: CGFloat = 0.25
+    static let defaultNearHeight = 0.33
+    /// Detections less certain than this are ignored.
+    static let minConfidence: Float = 0.5
     var blocked: Bool { verdict != .clear }
     @Published var objects: [String] = []
     @Published var error: String?
@@ -51,8 +53,8 @@ final class ObstacleDetector: NSObject, ObservableObject {
     private var lastFrame = Date.distantPast
     private var lastGood = Date.distantPast
     private var held: [VNRecognizedObjectObservation] = []
-    /// Read on the camera queue only.
-    private var nearHeight = ObstacleDetector.relaxedNearHeight
+    /// Copy of nearHeight, read on the camera queue only.
+    private var queueNearHeight = CGFloat(ObstacleDetector.defaultNearHeight)
 
     // Middle 40% wide, 70% tall (Vision uses normalized coordinates).
     private let zone = CGRect(x: 0.3, y: 0.15, width: 0.4, height: 0.7)
@@ -147,7 +149,7 @@ extension ObstacleDetector: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         // .right = phone held upright (portrait).
         try? VNImageRequestHandler(cvPixelBuffer: pixels, orientation: .right).perform([request])
-        let good = (request.results as? [VNRecognizedObjectObservation] ?? []).filter { $0.confidence >= 0.6 }
+        let good = (request.results as? [VNRecognizedObjectObservation] ?? []).filter { $0.confidence >= Self.minConfidence }
         // Hold detections briefly so one missed frame doesn't flicker to CLEAR.
         if !good.isEmpty {
             held = good
@@ -157,10 +159,10 @@ extension ObstacleDetector: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Far-away (small-looking) objects are listed but don't count as obstacles.
-        let near = held.filter { $0.boundingBox.height >= nearHeight }
+        let near = held.filter { $0.boundingBox.height >= queueNearHeight }
         let verdict = decide(near.map(\.boundingBox))
         let labels = held.map { observation in
-            let distance = observation.boundingBox.height >= nearHeight ? "near" : "far"
+            let distance = observation.boundingBox.height >= queueNearHeight ? "near" : "far"
             return "\(observation.labels.first?.identifier ?? "object") · \(Int(observation.confidence * 100))% · \(distance)"
         }
         DispatchQueue.main.async {

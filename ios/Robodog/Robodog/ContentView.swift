@@ -73,7 +73,19 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .accessibilityHidden(true)
                         Text(cameraStatus).font(.title3.bold())
-                        Toggle("Relaxed (demo): only stop for close obstacles", isOn: $detector.relaxed)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Stop distance")
+                            HStack {
+                                Text("Near").font(.footnote)
+                                // Right = stop further away = a smaller object height already counts.
+                                Slider(value: Binding(get: { 0.75 - detector.nearHeight },
+                                                      set: { detector.nearHeight = 0.75 - $0 }),
+                                       in: 0.15...0.6)
+                                Text("Far").font(.footnote)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Stop distance")
                         ForEach(detector.objects, id: \.self) { Text($0) }
                         if let error = detector.error {
                             Text(error).foregroundStyle(.red)
