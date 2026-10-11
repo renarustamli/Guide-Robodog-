@@ -9,11 +9,14 @@ final class RouteGuide: NSObject, ObservableObject {
 
     // Indoor demo for the hackathon table, where GPS won't move. Same as the browser demo.
     static let demoRoute: [(cue: String, text: String, wait: TimeInterval)] = [
-        ("STRAIGHT", "Walk straight for 20 m", 4),
-        ("LEFT", "Turn left onto the high street", 6),
-        ("STRAIGHT", "Continue straight for 50 m", 5),
-        ("RIGHT", "Turn right at the corner", 6),
-        ("ARRIVED", "You have arrived at Tesco", 0),
+        ("STRAIGHT", "Walk in through the main doors, straight for 5 m", 4),
+        ("RIGHT", "Turn right into fruit and veg", 5),
+        ("STRAIGHT", "Continue straight past the produce for 4 m", 4),
+        ("LEFT", "Turn left into aisle 3, bakery and bread", 5),
+        ("STRAIGHT", "Walk down the aisle for 6 m", 5),
+        ("RIGHT", "Turn right at the end of the aisle, towards the chilled section", 5),
+        ("STRAIGHT", "Continue straight for 3 m", 4),
+        ("ARRIVED", "You have arrived at the dairy fridge", 0),
     ]
 
     @Published var instruction = "No route."
