@@ -76,7 +76,7 @@ const unsigned long OBSTACLE_DECEL_MS = 900;
 bool decelerating = false;
 unsigned long decelStarted = 0;
 int decelFromSpeed = 0;
-const char *decelReason = "Camera obstacle";
+const char *decelReason = "";
 
 void reportStatus() {
   const char *names[] = {"stop", "forward", "reverse", "left", "right"};
@@ -91,7 +91,8 @@ void drivePacket() {
   if (direction == RIGHT) { left = -speedValue; right = speedValue; }
   sendRover(left, right);
 }
-void stopRover(const char *reason) {
+// Immediate stop. `quiet` skips the stop tone (a gentle stop has already beeped its warning).
+void stopRover(const char *reason, bool quiet = false) {
   if (calibrating) {
     reportf("CAL:Ended after %lu ms: %s", millis() - calibrationStarted, reason);
     calibrating = false;
@@ -105,21 +106,22 @@ void stopRover(const char *reason) {
   cancelPattern();
   digitalWrite(P2_IO2, HIGH);
   drivePacket();
-  tone(P3_IO1, 600, 120);
+  if (!quiet) tone(P3_IO1, 600, 120);
   reportf("STOP:%s", reason);
   reportStatus();
 }
-// Not used in the demo (obstacles start a detour instead of stopping); call it in place of startAvoid()
-// to go back to slowing down and stopping for obstacles.
-void obstacleStop(const char *reason) {
+// Gentle stop: two warning beeps, then slow down to a halt over OBSTACLE_DECEL_MS. Used for every stop
+// except the red button and calibration, which stay immediate. Ends any detour in progress.
+void gentleStop(const char *reason) {
   if (decelerating) return;
+  if (direction == STOPPED) { stopRover(reason); return; }
   decelReason = reason;
-  detourStep = -1;  // an obstacle ends any detour in progress
+  detourStep = -1;
   avoiding = false;
   ramping = false;
   decelerating = true; decelStarted = millis(); decelFromSpeed = speedValue;
-  playObstacleAlert();
-  report("STOP:Camera obstacle, slowing down");
+  playStopWarning();
+  reportf("SLOWING:%s", reason);
 }
 void onButtonPress() {
   if (!hostAlive || millis() - lastHost > 1200 || digitalRead(P2_IO1) == LOW) {
@@ -169,7 +171,7 @@ void refuse(const char *reason) {
 void processCommand(const String &line, bool fromBle = false) {
   if (line == "PING") { lastHost = millis(); hostAlive = true; return; }
   if (line == "STATUS") { reportStatus(); return; }
-  if (line == "STOP") { stopRover("Host stop"); return; }
+  if (line == "STOP") { gentleStop("Host stop"); return; }
   if (line == "CAM:CLEAR" || line == "CAM:BLOCK" || line.startsWith("CAM:AVOID:")) {
     cameraReady = true;
     cameraBlocked = line != "CAM:CLEAR";
@@ -186,7 +188,7 @@ void processCommand(const String &line, bool fromBle = false) {
   }
   if (line == "CAM:OFF") {
     cameraReady = false;
-    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) stopRover("Camera off");
+    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) gentleStop("Camera off");
     return;
   }
   if (line.startsWith("NAV:")) {
@@ -233,7 +235,7 @@ void processCommand(const String &line, bool fromBle = false) {
   if (separator < 0) return;
   uint32_t requestedEpoch = strtoul(line.substring(6, separator).c_str(), nullptr, 10);
   String word = line.substring(separator+1);
-  if (word == "stop") { stopRover("Voice stop"); return; }
+  if (word == "stop") { gentleStop("Voice stop"); return; }
   if (requestedEpoch != epoch || !hostAlive || digitalRead(P2_IO1) == LOW) {
     report("ERROR:Stale voice command or stop held"); return;
   }
@@ -293,12 +295,12 @@ void loop() {
     hostAlive = false;
     // Only a moving rover needs stopping. Stopping an already stopped one would bump the epoch
     // and reject a voice command that is still on its way (seen when PINGs lag during audio).
-    if (direction != STOPPED) stopRover("Host heartbeat lost");
+    if (direction != STOPPED) gentleStop("Host heartbeat lost");
     else report("HOST:Heartbeat lost");
   }
   if (cameraReady && now-lastCameraFrame > CAMERA_TIMEOUT_MS) {
     cameraReady = false;
-    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) stopRover("Camera timeout");
+    if (REQUIRE_CAMERA && (direction == FORWARD || avoiding)) gentleStop("Camera timeout");
   }
   if (avoiding && now - phaseStarted >= DETOUR[detourStep].ms) {
     if (detourStep + 1 < DETOUR_STEPS) enterDetourStep(detourStep + 1);
@@ -322,7 +324,7 @@ void loop() {
   }
   if (decelerating) {
     unsigned long elapsed = millis() - decelStarted;
-    if (elapsed >= OBSTACLE_DECEL_MS) stopRover(decelReason);
+    if (elapsed >= OBSTACLE_DECEL_MS) stopRover(decelReason, true);
     else speedValue = decelFromSpeed - (int)((unsigned long)decelFromSpeed * elapsed / OBSTACLE_DECEL_MS);
   }
   if (now-lastHeartbeat >= 100) { lastHeartbeat=now; drivePacket(); }
