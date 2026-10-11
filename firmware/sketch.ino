@@ -1,4 +1,5 @@
 #include <RotaryEncoder.h>
+#include "ble.h"
 
 #define BTN_PIN P1_IO0
 #define CLK_PIN P1_IO1
@@ -19,30 +20,105 @@ bool cameraBlocked = true;
 unsigned long lastCameraFrame = 0;
 String command;
 
+// Status goes to both USB serial (Axiometa Studio) and Bluetooth (iPhone app).
+void report(const String& message) {
+  Serial.println(message);
+  bleSend(message);
+}
+
+// Navigation cues: each step is a tone, then silence. Stop beeps (2000 Hz, 300 ms) always override these.
+struct Beep { int freq; int onMs; int offMs; };
+const Beep NAV_LEFT[] = {{1500, 150, 120}, {1500, 150, 0}};        // two short
+const Beep NAV_RIGHT[] = {{1500, 600, 0}};                         // one long
+const Beep NAV_STRAIGHT[] = {{1000, 100, 0}};                      // one short, low
+const Beep NAV_ARRIVED[] = {{1000, 150, 50}, {1300, 150, 50}, {1600, 300, 0}};  // rising
+#define PATTERN(p) p, sizeof(p) / sizeof(p[0])
+
+const Beep* pattern = nullptr;
+int patternLength = 0;
+int patternStep = 0;
+unsigned long stepStarted = 0;
+bool stepSounding = false;
+
+void startStep() {
+  tone(BUZZER_PIN, pattern[patternStep].freq);
+  stepStarted = millis();
+  stepSounding = true;
+}
+
+void playPattern(const Beep* p, int length) {
+  pattern = p;
+  patternLength = length;
+  patternStep = 0;
+  startStep();
+}
+
+void cancelPattern() {
+  pattern = nullptr;
+  noTone(BUZZER_PIN);
+}
+
+void servicePattern() {
+  if (!pattern) return;
+  const Beep& b = pattern[patternStep];
+  unsigned long elapsed = millis() - stepStarted;
+  if (stepSounding && elapsed >= (unsigned long)b.onMs) {
+    noTone(BUZZER_PIN);
+    stepSounding = false;
+  }
+  if (!stepSounding && elapsed >= (unsigned long)(b.onMs + b.offMs)) {
+    if (++patternStep >= patternLength) { pattern = nullptr; return; }
+    startStep();
+  }
+}
+
+void stopBeep() {
+  cancelPattern();
+  tone(BUZZER_PIN, 2000, 300);
+}
+
 void cameraStop() {
   if (running) {
     running = false;
     digitalWrite(STOP_LED_PIN, HIGH);
-    noTone(BUZZER_PIN);
-    tone(BUZZER_PIN, 2000, 300);
-    Serial.println("Camera stop: object detected or camera unavailable.");
+    stopBeep();
+    report("Camera stop: object detected or camera unavailable.");
     printStatus();
   }
 }
 
-void receiveCamera() {
+void navCue(const String& cue) {
+  // Guide only while walking; a stopped rover must not suggest moving.
+  if (!running) { report("Nav ignored: stopped"); return; }
+  if (cue == "LEFT") playPattern(PATTERN(NAV_LEFT));
+  else if (cue == "RIGHT") playPattern(PATTERN(NAV_RIGHT));
+  else if (cue == "STRAIGHT") playPattern(PATTERN(NAV_STRAIGHT));
+  else if (cue == "ARRIVED") playPattern(PATTERN(NAV_ARRIVED));
+  else { report("Nav ignored: unknown cue " + cue); return; }
+  report("Nav cue: " + cue);
+}
+
+void handleCommand(const String& command) {
+  if (command == "CAM:CLEAR" || command == "CAM:BLOCK") {
+    cameraReady = true;
+    cameraBlocked = command == "CAM:BLOCK";
+    lastCameraFrame = millis();
+    if (cameraBlocked) cameraStop();
+  } else if (command == "CAM:OFF") {
+    cameraReady = false;
+    cameraStop();
+  } else if (command.startsWith("NAV:")) {
+    navCue(command.substring(4));
+  }
+}
+
+void receiveCommands() {
+  String bleCommand;
+  while (nextBleCommand(bleCommand)) handleCommand(bleCommand);
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
-      if (command == "CAM:CLEAR" || command == "CAM:BLOCK") {
-        cameraReady = true;
-        cameraBlocked = command == "CAM:BLOCK";
-        lastCameraFrame = millis();
-        if (cameraBlocked) cameraStop();
-      } else if (command == "CAM:OFF") {
-        cameraReady = false;
-        cameraStop();
-      }
+      handleCommand(command);
       command = "";
     } else if (c != '\r') {
       command += c;
@@ -56,16 +132,14 @@ void receiveCamera() {
 }
 
 void printStatus() {
-  Serial.print(running ? "Running" : "Stopped");
-  Serial.print(" | Selected speed: ");
-  Serial.print(speedPercent);
-  Serial.println("% | Control test only: no motors connected");
+  report(String(running ? "Running" : "Stopped") + " | Selected speed: " + speedPercent +
+      "% | Control test only: no motors connected");
 }
 
 void onButtonPress() {
   if (digitalRead(STOP_PIN) == LOW || running) return;
   if (!cameraReady || cameraBlocked) {
-    Serial.println("Start blocked: start camera and remove recognized objects from the center first.");
+    report("Start blocked: start camera and remove recognized objects from the center first.");
     return;
   }
   running = true;
@@ -81,14 +155,17 @@ void setup() {
   digitalWrite(BUZZER_PIN, LOW);
   digitalWrite(STOP_LED_PIN, HIGH);
   Serial.begin(115200);
-  Serial.println("Control test: encoder on P1 starts and sets speed; LED button on P2 stops. Light on = stopped.");
-  Serial.println("Buzzer test: AX22-0018 on P3. Press the stop button for a short beep.");
-  Serial.println("Camera interlock enabled: waiting for computer Camera Test. Press encoder to start after a clear detection frame.");
+  initBle();
+  report("Control test: encoder on P1 starts and sets speed; LED button on P2 stops. Light on = stopped.");
+  report("Buzzer test: AX22-0018 on P3. Press the stop button for a short beep.");
+  report("Camera interlock enabled: waiting for Camera Test (USB) or the iPhone app (Bluetooth \"Robodog\"). Press encoder to start after a clear detection frame.");
+  report("Navigation cues: left = two short, right = one long, straight = one low, arrived = rising.");
   printStatus();
 }
 
 void loop() {
-  receiveCamera();
+  receiveCommands();
+  servicePattern();
   encoder.tick();
   long position = encoder.getPosition();
   long delta = position - previousPosition;
@@ -109,9 +186,8 @@ void loop() {
   if (stopState == LOW && lastStopState == HIGH) {
     running = false;
     digitalWrite(STOP_LED_PIN, HIGH);
-    noTone(BUZZER_PIN);
-    tone(BUZZER_PIN, 2000, 300);
-    Serial.println("Stop button pressed: 300 ms warning beep.");
+    stopBeep();
+    report("Stop button pressed: 300 ms warning beep.");
     printStatus();
   }
   lastStopState = stopState;
