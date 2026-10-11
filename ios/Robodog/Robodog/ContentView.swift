@@ -41,11 +41,22 @@ struct ContentView: View {
                     }
                 }
 
-                GroupBox("Voice route (dummy)") {
+                GroupBox("Demo destinations") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Say \"I want to go to the supermarket\": 2 m forward, turn right, 1 m forward.")
+                        Text("Say \"I want to go to the supermarket\" or \"…the museum\", or tap a button.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        HStack {
+                            ForEach(RouteExecutor.dummyRoutes.indices, id: \.self) { index in
+                                let route = RouteExecutor.dummyRoutes[index].route
+                                Button(route.name.replacingOccurrences(of: "the ", with: "").capitalized) {
+                                    driver.start(route)
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(!ble.isConnected || driver.isRunning)
+                            }
+                        }
+                        .controlSize(.large)
                         Text(driver.status).font(.title3)
                         if driver.isRunning {
                             Button("Stop route", role: .destructive) { driver.cancel() }
@@ -62,6 +73,7 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .accessibilityHidden(true)
                         Text(cameraStatus).font(.title3.bold())
+                        Toggle("Relaxed (demo): only stop for close obstacles", isOn: $detector.relaxed)
                         ForEach(detector.objects, id: \.self) { Text($0) }
                         if let error = detector.error {
                             Text(error).foregroundStyle(.red)

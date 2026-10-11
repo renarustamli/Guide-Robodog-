@@ -54,6 +54,8 @@ final class RouteExecutor: ObservableObject {
     static let dummyRoutes: [(keywords: [String], route: Route)] = [
         (["supermarket", "tesco", "shop", "store", "groceries"],
          Route(name: "the supermarket", legs: [.forward(metres: 2), .right(degrees: 90), .forward(metres: 1)])),
+        (["museum", "gallery", "exhibition"],
+         Route(name: "the museum", legs: [.forward(metres: 3), .left(degrees: 90), .forward(metres: 2)])),
     ]
 
     @Published var status = "No route."
