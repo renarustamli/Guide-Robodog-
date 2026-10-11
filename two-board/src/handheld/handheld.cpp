@@ -1,7 +1,8 @@
 // Handheld controller: your Studio Axiometa sketch.ino, logic unchanged.
 // Modules: P1 encoder (AX22-0003), P2 stop button (AX22-0050), P3 buzzer (AX22-0018), P4 microphone (AX22-0044).
-// Sends motor commands to the receiver over ESP-NOW every 100 ms; the PC "Studio" app sends
-// PING / RECORD / VOICE:<epoch>:<word> / STOP over USB serial.
+// Sends motor commands to the receiver over ESP-NOW every 100 ms. The host (the iPhone app over
+// Bluetooth, or the PC "Studio" panel over USB serial) sends PING / RECORD / VOICE:<epoch>:<word> / STOP,
+// plus CAM:CLEAR / CAM:BLOCK / CAM:OFF from a camera and NAV:<cue> from a route guide.
 //
 // Changes for PlatformIO: this file is .cpp, so it includes <Arduino.h> and "genesis_pins.h"
 // (the P1_IO0 ... names Studio Axiometa's board package provides).
@@ -9,7 +10,19 @@
 #include "genesis_pins.h"
 #include <RotaryEncoder.h>
 #include "rover_radio.h"
+#include "ble_link.h"
 #include "voice_capture.h"
+#include "nav_cues.h"
+
+// Intelligent disobedience: refuse to drive forward unless a camera reported a clear path in the
+// last 2 s, and stop if it sees an obstacle or goes quiet. Build with -DREQUIRE_CAMERA=0 to bench-test
+// without a camera.
+#ifndef REQUIRE_CAMERA
+#define REQUIRE_CAMERA 1
+#endif
+const unsigned long CAMERA_TIMEOUT_MS = 2000;
+bool cameraReady = false, cameraBlocked = true;
+unsigned long lastCameraFrame = 0;
 
 enum Direction { STOPPED, FORWARD, REVERSE, LEFT, RIGHT };
 RotaryEncoder encoder(P1_IO1, P1_IO2, RotaryEncoder::LatchMode::TWO03);
@@ -29,7 +42,7 @@ unsigned long calibrationStarted = 0, calibrationDuration = 0;
 
 void reportStatus() {
   const char *names[] = {"stop", "forward", "reverse", "left", "right"};
-  Serial.printf("STATE:%lu,%d,%s,%d\n", (unsigned long)epoch, speedValue, names[direction], digitalRead(P2_IO1) == LOW);
+  reportf("STATE:%lu,%d,%s,%d", (unsigned long)epoch, speedValue, names[direction], digitalRead(P2_IO1) == LOW);
 }
 void drivePacket() {
   int16_t left = 0, right = 0;
@@ -41,32 +54,60 @@ void drivePacket() {
 }
 void stopRover(const char *reason) {
   if (calibrating) {
-    Serial.printf("CAL:Ended after %lu ms: %s\n", millis() - calibrationStarted, reason);
+    reportf("CAL:Ended after %lu ms: %s", millis() - calibrationStarted, reason);
     calibrating = false;
   }
   ramping = false;
   direction = STOPPED; ++epoch;
+  cancelPattern();
   digitalWrite(P2_IO2, HIGH);
   drivePacket();
   tone(P3_IO1, 600, 120);
-  Serial.printf("STOP:%s\n", reason);
+  reportf("STOP:%s", reason);
   reportStatus();
 }
 void onButtonPress() {
   if (!hostAlive || millis() - lastHost > 1200 || digitalRead(P2_IO1) == LOW) {
-    Serial.println("ERROR:Release stop and connect voice panel before starting");
+    report("ERROR:Release stop and connect voice panel before starting");
     return;
   }
   if (calibrating) return;
-  Serial.println("LISTEN:Encoder pressed");
+  report("LISTEN:Encoder pressed");
 }
-void processCommand(const String &line) {
+bool cameraClear() {
+  return !REQUIRE_CAMERA || (cameraReady && !cameraBlocked);
+}
+void refuse(const char *reason) {
+  cancelPattern();
+  tone(P3_IO1, 600, 300);
+  reportf("REFUSED:%s", reason);
+}
+void processCommand(const String &line, bool fromBle = false) {
   if (line == "PING") { lastHost = millis(); hostAlive = true; return; }
   if (line == "STATUS") { reportStatus(); return; }
-  if (line == "STOP") { stopRover("Studio stop"); return; }
+  if (line == "STOP") { stopRover("Host stop"); return; }
+  if (line == "CAM:CLEAR" || line == "CAM:BLOCK") {
+    cameraReady = true;
+    cameraBlocked = line == "CAM:BLOCK";
+    lastCameraFrame = millis();
+    if (REQUIRE_CAMERA && cameraBlocked && direction == FORWARD) stopRover("Camera obstacle");
+    return;
+  }
+  if (line == "CAM:OFF") {
+    cameraReady = false;
+    if (REQUIRE_CAMERA && direction == FORWARD) stopRover("Camera off");
+    return;
+  }
+  if (line.startsWith("NAV:")) {
+    // Guide only while moving; a stopped rover must not suggest walking.
+    if (direction == STOPPED) { report("NAV:Ignored, stopped"); return; }
+    if (playNavCue(line.substring(4))) reportf("NAV:%s", line.c_str() + 4);
+    else report("ERROR:Unknown navigation cue");
+    return;
+  }
   if (line.startsWith("CAL:")) {
     if (!hostAlive || millis()-lastHost > 1200 || digitalRead(P2_IO1) == LOW || direction != STOPPED) {
-      Serial.println("ERROR:Calibration requires connected Studio, released P2, and stopped rover"); return;
+      report("ERROR:Calibration requires connected Studio, released P2, and stopped rover"); return;
     }
     int split = line.indexOf(':', 4);
     if (split < 0) return;
@@ -76,22 +117,22 @@ void processCommand(const String &line) {
     long duration = strtol(text, &end, 10);
     if (end == text || *end || duration < 100 || duration > 10000 ||
         (move != "forward" && move != "right" && move != "left")) {
-      Serial.println("ERROR:Invalid calibration (100 to 10000 ms, forward/left/right)"); return;
+      report("ERROR:Invalid calibration (100 to 10000 ms, forward/left/right)"); return;
     }
     ++epoch;
     direction = move == "forward" ? FORWARD : (move == "right" ? RIGHT : LEFT);
     speedValue = 80; rampStarted = millis(); ramping = true;
     calibrating = true; calibrationStarted = rampStarted; calibrationDuration = duration;
     digitalWrite(P2_IO2, LOW);
-    Serial.printf("CAL:Started %s for %ld ms, ramp 80 to 160 over 4 s\n", move.c_str(), duration);
+    reportf("CAL:Started %s for %ld ms, ramp 80 to 160 over 4 s", move.c_str(), duration);
     drivePacket(); reportStatus(); return;
   }
   if (calibrating && (line == "RECORD" || line.startsWith("VOICE:"))) {
-    Serial.println("ERROR:Stop calibration before using voice"); return;
+    report("ERROR:Stop calibration before using voice"); return;
   }
   if (line == "RECORD") {
-    if (!hostAlive || digitalRead(P2_IO1) == LOW) { Serial.println("ERROR:Release stop and connect voice panel"); return; }
-    requestVoice(epoch); return;
+    if (!hostAlive || digitalRead(P2_IO1) == LOW) { report("ERROR:Release stop and connect voice panel"); return; }
+    requestVoice(epoch, fromBle); return;
   }
   if (!line.startsWith("VOICE:")) return;
   int separator = line.indexOf(':', 6);
@@ -100,13 +141,14 @@ void processCommand(const String &line) {
   String word = line.substring(separator+1);
   if (word == "stop") { stopRover("Voice stop"); return; }
   if (requestedEpoch != epoch || !hostAlive || digitalRead(P2_IO1) == LOW) {
-    Serial.println("ERROR:Stale voice command or stop held"); return;
+    report("ERROR:Stale voice command or stop held"); return;
   }
+  if (word == "forward" && !cameraClear()) { refuse("Camera has not reported a clear path"); return; }
   if (word == "forward") direction = FORWARD;
   else if (word == "reverse") direction = REVERSE;
   else if (word == "left") direction = LEFT;
   else if (word == "right") direction = RIGHT;
-  else { Serial.println("ERROR:Unknown voice command"); return; }
+  else { report("ERROR:Unknown voice command"); return; }
   speedValue = 80;
   rampStarted = millis();
   ramping = true;
@@ -122,8 +164,9 @@ void setup() {
   pinMode(P2_IO2, OUTPUT); digitalWrite(P2_IO2, HIGH);
   pinMode(P3_IO1, OUTPUT);
   commandLine.reserve(100);
-  beginRadio(); beginVoice();
-  Serial.println("READY:Rover controller; encoder=speed/click to listen, P2=stop, Studio=voice capture");
+  navBuzzerPin = P3_IO1;
+  beginRadio(); initBle(); beginVoice();
+  report("READY:Rover controller; encoder=speed/click to listen, P2=stop, host=iPhone (Bluetooth \"Robodog\") or Studio (USB)");
   reportStatus(); drivePacket();
 }
 void loop() {
@@ -140,7 +183,13 @@ void loop() {
   if (stopPressed && !previousStop) stopRover("Physical stop");
   previousStop = stopPressed;
   unsigned long now = millis();
-  if (hostAlive && now-lastHost > 1200) { hostAlive=false; stopRover("Studio heartbeat lost"); }
+  if (hostAlive && now-lastHost > 1200) { hostAlive=false; stopRover("Host heartbeat lost"); }
+  if (cameraReady && now-lastCameraFrame > CAMERA_TIMEOUT_MS) {
+    cameraReady = false;
+    if (REQUIRE_CAMERA && direction == FORWARD) stopRover("Camera timeout");
+  }
+  String bleCommand;
+  while (nextBleCommand(bleCommand)) processCommand(bleCommand, true);
   for (int n=0; n<128 && Serial.available(); ++n) {
     char c=Serial.read();
     if (c=='\n') { processCommand(commandLine); commandLine=""; }
@@ -164,5 +213,6 @@ void loop() {
   }
   lastBtnState = btn;
   pollVoice();
+  servicePattern();
   delay(1);
 }

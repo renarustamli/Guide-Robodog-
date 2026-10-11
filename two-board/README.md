@@ -9,7 +9,7 @@ Pick one in the VS Code PlatformIO status bar, or use `-e` on the command line.
 | Env | What it builds | Command |
 |---|---|---|
 | `control_test` (default) | Your control sketch: encoder sets speed and starts, LED button stops, buzzer, camera interlock over serial | `pio run -e control_test -t upload` |
-| `handheld` | **Controller board** (your Studio Axiometa sketch): encoder speed, stop button, buzzer, mic, ESP-NOW to the receiver | `pio run -e handheld -t upload` |
+| `handheld` | **Controller board**: encoder speed, stop button, buzzer, mic, ESP-NOW to the receiver, Bluetooth to the iPhone app | `pio run -e handheld -t upload` |
 | `receiver` | **Motor board** (your Studio Axiometa sketch): ESP-NOW from the handheld drives two AX22-0032 motor modules on P2 and P3 | `pio run -e receiver -t upload` |
 | `rover` | Voice + route-following firmware, single-board design. **Paused**, not built with the others | `pio run -e rover -t upload` |
 
@@ -22,21 +22,30 @@ Pick one in the VS Code PlatformIO status bar, or use `-e` on the command line.
 | `include/pins.h` | **Every GPIO the project uses, in one place.** Fails to build if two functions share a pin |
 | `src/control_test/control_test.cpp` | Your sketch (logic unchanged) |
 | `src/control_test/voice_capture.h` | Your microphone capture (2 s clips sent as hex over serial); pins now read from `pins.h` |
-| `src/control_test/voice.h` | Obsolete empty placeholder, safe to delete |
 | `src/receiver/receiver.cpp` | Motor board sketch (your `sketch.ino`, logic unchanged) |
-| `src/handheld/` | Controller board: `handheld.cpp`, its `rover_radio.h` (sender) and `voice_capture.h` |
+| `src/handheld/` | Controller board: `handheld.cpp`, `rover_radio.h` (ESP-NOW sender), `voice_capture.h` (3 s clips to USB or Bluetooth), `ble_link.h` (Bluetooth to the iPhone), `nav_cues.h` (buzzer turn cues) |
 | `src/receiver/rover_radio.h` | Receiver side of the same ESP-NOW protocol (channel 1, 12-byte packet, signed PWM -255..255) plus the sender filter |
 | `axiometa.json`, `axiometa.handheld.json` | Studio Axiometa module manifests: the receiver (AX22-0032 on ports 2, 3) and the handheld (ports 1 to 4) |
-| `include/rover_radio.h` | Obsolete, safe to delete |
 | `src/main.cpp`, `follower.h`, `motors.h` | Paused single-board rover firmware: audio, wake word, Wi-Fi hand-off, route following, motors |
 | `laptop/` | Whisper + route planner server, and a simulation of the follower |
 
 ## Two boards
 
-- **Handheld controller** (`handheld`): encoder speed, stop button, buzzer, microphone, and the Studio serial protocol. Sends a `RoverPacket` to the receiver every 100 ms. `control_test` is the earlier camera-interlock test sketch for the same board.
+- **Handheld controller** (`handheld`): encoder speed, stop button, buzzer, microphone. Sends a `RoverPacket` to the receiver every 100 ms. Its host is the iPhone app over Bluetooth (see below) or the Studio panel over USB; both use the same text commands. `control_test` is the earlier camera-interlock test sketch for the same board.
 - **Receiver** (`receiver`): motors only. Left motor P2_IO1/P2_IO2 (GPIO 6/5), right motor P3_IO1/P3_IO2 (GPIO 16/15). It stops if no command arrives for 400 ms, and only obeys the handheld MAC set in `rover_radio.h` (`ROVER_ALLOWED_SENDER`; all zeros = ignore all radio packets).
 - Receiver MAC `A0:F2:62:EB:98:BC` is set in `src/handheld/rover_radio.h`. The handheld MAC `A0:F2:62:EB:92:D8` is allowlisted in `src/receiver/rover_radio.h`; if you replace the handheld, update `ROVER_ALLOWED_SENDER` with its startup MAC.
 - The pin map below is for the handheld and the paused single-board design. The receiver's pins are set in `receiver.cpp`.
+
+## Handheld with the iPhone app
+
+The handheld advertises over Bluetooth as **Robodog** (Nordic UART Service, plus an audio characteristic `6E400004-…`). The iPhone app in [`../ios/`](../ios/README.md) is its host:
+
+- **Heartbeat**: the app sends `PING` every 0.4 s. Without one for 1.2 s the handheld stops, as before.
+- **Voice**: click the encoder → handheld sends `LISTEN` → app sends `RECORD` → handheld records **3 s** and streams raw PCM over Bluetooth, then `AUDIO_END:<epoch>:<bytes>` → the app recognises speech on the phone and sends `VOICE:<epoch>:<word>`. "Guide me to X" starts a walking route in the app instead.
+- **Camera (intelligent disobedience)**: the app sends `CAM:CLEAR` / `CAM:BLOCK` about 5 times a second. `forward` is refused (`REFUSED:...`, long low beep) unless the camera reported clear in the last 2 s; an obstacle, `CAM:OFF` or 2 s of silence stops forward motion. Build with `-DREQUIRE_CAMERA=0` to bench-test without a camera.
+- **Navigation**: the app sends `NAV:LEFT` / `NAV:RIGHT` / `NAV:STRAIGHT` / `NAV:ARRIVED` near each turn; the handle buzzes (two short / one long / one low / rising). Ignored while stopped. Stop tones cancel any cue.
+
+USB still works the same way for the Studio panel. Clips requested over USB are sent as `PCM:<hex>` lines, now 3 s long.
 
 ## Pin map (from `include/pins.h`)
 
