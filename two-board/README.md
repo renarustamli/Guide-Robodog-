@@ -1,36 +1,35 @@
-# Two-board firmware (Axiometa Genesis Mini)
-
-PlatformIO project for the handheld and receiver boards. Open the `two-board/` folder in VS Code.
-The single-board control test in `../firmware/sketch.ino` is left as it was; `src/control_test/` here is the same test with the microphone calls added.
+# Guide rover prototype (Axiometa Genesis Mini)
 
 Prototype only: test with the wheels off the ground first, then with a sighted supervisor holding the stop button.
 
-## Build targets
+## Two build targets
 
 Pick one in the VS Code PlatformIO status bar, or use `-e` on the command line.
 
 | Env | What it builds | Command |
 |---|---|---|
-| `control_test` (default) | Control sketch: encoder sets speed and starts, LED button stops, buzzer, camera interlock over serial | `pio run -e control_test -t upload` |
-| `handheld` | **Controller board** (from Axiometa Studio): encoder speed, stop button, buzzer, mic, ESP-NOW to the receiver | `pio run -e handheld -t upload` |
-| `receiver` | **Motor board** (from Axiometa Studio): ESP-NOW from the handheld drives two AX22-0032 motor modules on P2 and P3 | `pio run -e receiver -t upload` |
+| `control_test` (default) | Your control sketch: encoder sets speed and starts, LED button stops, buzzer, camera interlock over serial | `pio run -e control_test -t upload` |
+| `handheld` | **Controller board** (your Studio Axiometa sketch): encoder speed, stop button, buzzer, mic, ESP-NOW to the receiver | `pio run -e handheld -t upload` |
+| `receiver` | **Motor board** (your Studio Axiometa sketch): ESP-NOW from the handheld drives two AX22-0032 motor modules on P2 and P3 | `pio run -e receiver -t upload` |
 | `rover` | Voice + route-following firmware, single-board design. **Paused**, not built with the others | `pio run -e rover -t upload` |
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `platformio.ini` | Genesis Mini settings (4 MB flash, 2 MB QSPI PSRAM) and the envs |
+| `platformio.ini` | Genesis Mini settings (4 MB flash, 2 MB QSPI PSRAM) and the two envs |
 | `include/genesis_pins.h` | Genesis Mini port names (`P1_IO0` ...), copied from the Arduino-ESP32 board definition |
 | `include/pins.h` | **Every GPIO the project uses, in one place.** Fails to build if two functions share a pin |
-| `src/control_test/control_test.cpp` | Early control-test sketch (camera interlock over serial) |
-| `src/control_test/voice_capture.h` | Microphone capture (2 s clips sent as hex over serial); pins now read from `pins.h` |
-| `src/receiver/receiver.cpp` | Motor board sketch (from the Studio `sketch.ino`) |
+| `src/control_test/control_test.cpp` | Your sketch (logic unchanged) |
+| `src/control_test/voice_capture.h` | Your microphone capture (2 s clips sent as hex over serial); pins now read from `pins.h` |
+| `src/control_test/voice.h` | Obsolete empty placeholder, safe to delete |
+| `src/receiver/receiver.cpp` | Motor board sketch (your `sketch.ino`, logic unchanged) |
 | `src/handheld/` | Controller board: `handheld.cpp`, its `rover_radio.h` (sender) and `voice_capture.h` |
 | `src/receiver/rover_radio.h` | Receiver side of the same ESP-NOW protocol (channel 1, 12-byte packet, signed PWM -255..255) plus the sender filter |
-| `axiometa.receiver.json`, `axiometa.handheld.json` | Axiometa Studio module manifests: the receiver (AX22-0032 on ports 2, 3) and the handheld (ports 1 to 4, same as the repo-root `axiometa.json`) |
+| `axiometa.json`, `axiometa.handheld.json` | Studio Axiometa module manifests: the receiver (AX22-0032 on ports 2, 3) and the handheld (ports 1 to 4) |
+| `include/rover_radio.h` | Obsolete, safe to delete |
 | `src/main.cpp`, `follower.h`, `motors.h` | Paused single-board rover firmware: audio, wake word, Wi-Fi hand-off, route following, motors |
-| `laptop/` | Whisper + route planner server and a follower simulation (paused design) |
+| `laptop/` | Whisper + route planner server, and a simulation of the follower |
 
 ## Two boards
 
@@ -43,15 +42,15 @@ Pick one in the VS Code PlatformIO status bar, or use `-e` on the command line.
 
 | Function | Port pin | GPIO | Status |
 |---|---|---|---|
-| Encoder push button | P1_IO0 | 4 | wired |
+| Encoder push button | P1_IO0 | 4 | wired (your sketch) |
 | Encoder CLK / DT | P1_IO1 / P1_IO2 | 3 / 2 | wired |
 | Stop button / its LED | P2_IO1 / P2_IO2 | 6 / 5 | wired |
 | Buzzer | P3_IO1 | 16 | wired |
-| Microphone SELECT (driven LOW) / data / clock | P4_IO0 / P4_IO1 / P4_IO2 | 1 / 17 / 18 | from voice_capture.h |
-| Motor L fwd / rev, R fwd | P2_IO0, P3_IO0, P3_IO2 | 7, 9, 15 | proposed (paused single-board design) |
-| Motor R rev | SCK | 14 | proposed (paused single-board design) |
-| Wheel encoders L / R (one channel each) | SDA, SCL | 10, 11 | proposed (paused single-board design) |
-| Deadman switch on handle | MOSI | 12 | proposed (paused single-board design) |
+| Microphone SELECT (driven LOW) / data / clock | P4_IO0 / P4_IO1 / P4_IO2 | 1 / 17 / 18 | from your voice_capture.h |
+| Motor L fwd / rev, R fwd | P2_IO0, P3_IO0, P3_IO2 | 7, 9, 15 | proposed |
+| Motor R rev | SCK | 14 | proposed |
+| Wheel encoders L / R (one channel each) | SDA, SCL | 10, 11 | proposed |
+| Deadman switch on handle | MOSI | 12 | proposed |
 | Free | MISO | 13 | |
 
 ## control_test: how it behaves
@@ -64,7 +63,7 @@ Pick one in the VS Code PlatformIO status bar, or use `-e` on the command line.
 
 ## rover: before the first flash
 
-- Set the Wi-Fi name, password and laptop IP in `src/main.cpp`; the microphone pins already match `voice_capture.h`.
+- Set the Wi-Fi name, password and laptop IP in `src/main.cpp`; the microphone pins already match your `voice_capture.h`.
 - Sensors in `src/main.cpp` are stubs: `imuGyroZ()`, `compassHeading()`, `obstacleDistanceM()`. A route will not start without a heading and an obstacle sensor. For supervised bench tests only, add `-DDEV_FAKE_HEADING_DEG=90` and `-DALLOW_NO_OBSTACLE_SENSOR` to the `rover` env's `build_flags`.
 - Set wheel size, encoder counts and track width in `src/motors.h`.
 - The stop button stops the rover and aborts the route; a new route is needed to move again. The encoder button confirms a road crossing. Voice never confirms a crossing.

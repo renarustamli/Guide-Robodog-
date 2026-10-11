@@ -1,6 +1,6 @@
 // Rover receiver (motor board): your Studio Axiometa sketch.ino, logic unchanged.
 // Motors: two AX22-0032 modules, left on P2, right on P3. Commands arrive over ESP-NOW from the
-// handheld (see rover_radio.h in this folder) or as "SET:left,right" over USB until the radio takes over.
+// handheld (see include/rover_radio.h) or as "SET:left,right" over USB until the radio takes over.
 //
 // Changes for PlatformIO: this file is .cpp, so it includes <Arduino.h> and "genesis_pins.h"
 // (the P2_IO1 ... names Studio Axiometa's board package provides).
