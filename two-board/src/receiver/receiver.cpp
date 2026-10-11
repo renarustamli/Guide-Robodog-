@@ -13,7 +13,8 @@ struct Motor {
   int requested, applied;
   unsigned long offAt;
 };
-Motor leftMotor = {P3_IO1, P3_IO2, P4_IO1, P4_IO2, 0, 0, 0};
+// P3 and P4 pins swapped (IO2 before IO1) to reverse both left motors.
+Motor leftMotor = {P3_IO2, P3_IO1, P4_IO2, P4_IO1, 0, 0, 0};
 Motor rightMotor = {P2_IO2, P2_IO1, P1_IO2, P1_IO1, 0, 0, 0};
 unsigned long lastCommand = 0;
 unsigned long lastReport = 0;
